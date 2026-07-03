@@ -1,10 +1,21 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  IpcMainInvokeEvent,
+  screen,
+  session,
+  shell
+} from 'electron';
 import OpenAI, { toFile } from 'openai';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import {
   existsSync,
+  copyFileSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -87,6 +98,10 @@ type CopyMarkdownResult = {
   bytes: number;
 };
 
+type ExportMarkdownResult =
+  | { canceled: true }
+  | { canceled: false; filePath: string; directory: string; overwritten: boolean };
+
 type AIProvider = {
   transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
   analyzeTranscript: (transcript: string) => Promise<FluxAnalysis & { title: string }>;
@@ -103,6 +118,13 @@ const transcriptEngine = require(path.join(__dirname, '../scripts/transcript.cjs
 };
 const defaultBounds: WindowBounds = { width: 980, height: 660 };
 const defaultDataDir = path.join(os.homedir(), 'Flux');
+const defaultMarkdownExportDir = path.join(
+  os.homedir(),
+  'OneDrive',
+  'Desktop',
+  'Flux Cowork',
+  'Saved Flux Notes'
+);
 const settingsDir = path.join(defaultDataDir, '.flux');
 const settingsPath = path.join(settingsDir, 'settings.json');
 const allowedLocalEnvKeys = new Set([
@@ -769,6 +791,45 @@ function copyMarkdown(payload: CopyMarkdownPayload): CopyMarkdownResult {
   };
 }
 
+async function exportMarkdown(event: IpcMainInvokeEvent, payload: CopyMarkdownPayload): Promise<ExportMarkdownResult> {
+  assertTrustedSender(event);
+  const note = findNoteRecord(payload.noteId, payload.folder);
+  if (!existsSync(note.path)) {
+    throw new Error(`Could not export missing note file ${note.id}.md.`);
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const directory = defaultMarkdownExportDir;
+  mkdirSync(directory, { recursive: true });
+  const fileName = path.basename(note.path);
+  const filePath = path.join(directory, fileName);
+  const alreadyExists = existsSync(filePath);
+
+  if (alreadyExists) {
+    const overwriteOptions: Electron.MessageBoxOptions = {
+      type: 'warning',
+      title: 'Overwrite markdown note?',
+      message: `${fileName} already exists in this folder.`,
+      detail: filePath,
+      buttons: ['Cancel', 'Overwrite'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    };
+    const overwrite = parentWindow
+      ? await dialog.showMessageBox(parentWindow, overwriteOptions)
+      : await dialog.showMessageBox(overwriteOptions);
+
+    if (overwrite.response !== 1) {
+      return { canceled: true };
+    }
+  }
+
+  copyFileSync(note.path, filePath);
+  void shell.openPath(directory);
+  return { canceled: false, filePath, directory, overwritten: alreadyExists };
+}
+
 function moveNote(noteId: string, targetFolder: string) {
   const dataDir = ensureLibrary();
   const folder = sanitizeFolderName(targetFolder);
@@ -919,6 +980,10 @@ app.whenReady().then(() => {
   ipcMain.handle('note:copy-markdown', (event, payload: CopyMarkdownPayload) => {
     assertTrustedSender(event);
     return copyMarkdown(payload);
+  });
+
+  ipcMain.handle('note:export-markdown', (event, payload: CopyMarkdownPayload) => {
+    return exportMarkdown(event, payload);
   });
 
   createWindow();

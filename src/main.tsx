@@ -433,15 +433,18 @@ function NotePane({
   selectedNote,
   folders,
   onMoveNote,
-  onCopyMarkdown
+  onCopyMarkdown,
+  onExportMarkdown
 }: {
   selectedNote: FluxNoteSummary | null;
   folders: FluxFolder[];
   onMoveNote: (targetFolder: string) => void;
   onCopyMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
+  onExportMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
   const title = selectedNote?.title ?? 'Record your first FLUX note';
   const analysis = selectedNote?.analysis;
   const transcript =
@@ -455,6 +458,7 @@ function NotePane({
 
   useEffect(() => {
     setCopyStatus('idle');
+    setExportStatus('idle');
   }, [selectedNote?.id, selectedNote?.folder]);
 
   const copyMarkdown = async () => {
@@ -465,6 +469,16 @@ function NotePane({
     setCopyStatus('copying');
     const copied = await onCopyMarkdown(selectedNote);
     setCopyStatus(copied ? 'copied' : 'idle');
+  };
+
+  const exportMarkdown = async () => {
+    if (!selectedNote || exportStatus === 'exporting') {
+      return;
+    }
+
+    setExportStatus('exporting');
+    const exported = await onExportMarkdown(selectedNote);
+    setExportStatus(exported ? 'exported' : 'idle');
   };
 
   return (
@@ -568,13 +582,24 @@ function NotePane({
           <IconCopy />
           {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy as .md'}
         </button>
-        <div className="drag-handle" aria-disabled="true">
+        <button
+          type="button"
+          className="export-folder-button"
+          onClick={exportMarkdown}
+          disabled={!selectedNote || exportStatus === 'exporting'}
+        >
           <IconDrag />
           <span>
-            <strong>Drag out</strong>
-            <small>Held for Phase 5</small>
+            <strong>
+              {exportStatus === 'exporting'
+                ? 'Exporting...'
+                : exportStatus === 'exported'
+                  ? 'Exported'
+                  : 'Export to folder'}
+            </strong>
+            <small>{selectedNote ? 'Save .md copy' : 'Held for Phase 5'}</small>
           </span>
-        </div>
+        </button>
       </footer>
     </section>
   );
@@ -781,6 +806,28 @@ function App() {
     }
   }, []);
 
+  const exportMarkdown = useCallback(async (note: FluxNoteSummary) => {
+    try {
+      setErrorMessage(null);
+      setEnvStatusMessage(null);
+      const result = await window.fluxLibrary.exportMarkdown({
+        noteId: note.id,
+        folder: note.folder
+      });
+
+      if (result.canceled) {
+        return false;
+      }
+
+      setEnvStatusMessage(`Exported ${note.id}.md to ${result.directory}.`);
+      return true;
+    } catch (error) {
+      setCaptureStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not export markdown.');
+      return false;
+    }
+  }, []);
+
   const createFolder = useCallback(async (name: string) => {
     try {
       setErrorMessage(null);
@@ -837,6 +884,7 @@ function App() {
         folders={library?.folders ?? []}
         onMoveNote={moveSelectedNote}
         onCopyMarkdown={copyMarkdown}
+        onExportMarkdown={exportMarkdown}
       />
     </main>
   );
