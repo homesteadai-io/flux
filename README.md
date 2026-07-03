@@ -11,6 +11,16 @@ npm install
 npm run dev
 ```
 
+## YouTube Captions
+
+Flux uses `yt-dlp` to pull native YouTube captions without downloading video:
+
+```bash
+npm run watch -- "<youtube-url>"
+```
+
+The same caption-only engine powers the desktop URL bar.
+
 ## Secrets
 
 Copy `.env.example` to `.env.local` and set `OPENAI_API_KEY` plus the model config values when AI phases begin.
