@@ -32,12 +32,19 @@ type FluxFolder = {
   count: number;
 };
 
+type FluxAnalysis = {
+  model: string;
+  topline: string;
+  nextSteps: string[];
+};
+
 type FluxNoteSummary = {
   id: string;
   title: string;
   source: 'voice' | 'youtube';
   created: string;
   folder: string;
+  analysis?: FluxAnalysis;
   transcriptPreview: string;
 };
 
@@ -57,6 +64,7 @@ type SaveRecordingPayload = {
 
 type AIProvider = {
   transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
+  analyzeTranscript: (transcript: string) => Promise<FluxAnalysis & { title: string }>;
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -205,9 +213,48 @@ function parseFrontmatter(markdown: string) {
   return data;
 }
 
+function extractSection(markdown: string, heading: string) {
+  const lines = markdown.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line.trim() === `## ${heading}`);
+  if (startIndex === -1) {
+    return '';
+  }
+
+  const sectionLines: string[] = [];
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith('## ')) {
+      break;
+    }
+    sectionLines.push(lines[index]);
+  }
+  return sectionLines.join('\n').trim();
+}
+
 function extractTranscript(markdown: string) {
-  const transcript = markdown.split(/^## Transcript\s*$/m)[1]?.trim() ?? '';
+  const transcript = extractSection(markdown, 'Transcript');
   return transcript.replace(/\s+/g, ' ').slice(0, 180);
+}
+
+function extractListItems(section: string) {
+  return section
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*]\s+(?:\[[ xX]\]\s+)?/, '').trim())
+    .filter(Boolean);
+}
+
+function extractAnalysis(markdown: string, meta: Record<string, string>): FluxAnalysis | undefined {
+  const topline = extractSection(markdown, 'AI Analysis');
+  const nextSteps = extractListItems(extractSection(markdown, 'Next Steps'));
+
+  if (!topline && nextSteps.length === 0) {
+    return undefined;
+  }
+
+  return {
+    model: meta.analysis_model || 'unknown',
+    topline,
+    nextSteps
+  };
 }
 
 function toPublicNote(note: FluxNoteRecord): FluxNoteSummary {
@@ -237,6 +284,7 @@ function listNoteRecords(dataDir = ensureLibrary()): FluxNoteRecord[] {
         source: meta.source === 'youtube' ? 'youtube' : 'voice',
         created: meta.created || statSync(notePath).mtime.toISOString(),
         folder,
+        analysis: extractAnalysis(markdown, meta),
         transcriptPreview: extractTranscript(markdown),
         path: notePath
       });
@@ -283,9 +331,45 @@ function getTranscriptionModelId() {
   return readSettings().transcriptionModelId ?? process.env.OPENAI_TRANSCRIPTION_MODEL;
 }
 
+function getAnalysisModelId() {
+  return readSettings().analysisModelId ?? process.env.OPENAI_ANALYSIS_MODEL;
+}
+
+function stripJsonFences(value: string) {
+  return value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+}
+
+function normalizeBreakdown(rawValue: unknown, model: string, transcript: string) {
+  if (!rawValue || typeof rawValue !== 'object') {
+    throw new Error('OpenAI returned an invalid analysis payload.');
+  }
+
+  const raw = rawValue as Record<string, unknown>;
+  const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+  const topline = typeof raw.topline === 'string' ? raw.topline.trim() : '';
+  const nextSteps = Array.isArray(raw.next_steps)
+    ? raw.next_steps
+        .filter((step): step is string => typeof step === 'string')
+        .map((step) => step.trim())
+        .filter(Boolean)
+    : [];
+
+  if (!topline) {
+    throw new Error('OpenAI analysis was missing a topline.');
+  }
+
+  return {
+    model,
+    title: title || buildTitle(transcript),
+    topline,
+    nextSteps: nextSteps.slice(0, 6)
+  };
+}
+
 function createOpenAIProvider(): AIProvider {
   const apiKey = process.env.OPENAI_API_KEY;
   const transcriptionModel = getTranscriptionModelId();
+  const analysisModel = getAnalysisModelId();
 
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is missing. Add it to .env.local and restart Flux.');
@@ -293,6 +377,10 @@ function createOpenAIProvider(): AIProvider {
 
   if (!transcriptionModel) {
     throw new Error('OPENAI_TRANSCRIPTION_MODEL is missing. Add it to .env.local and restart Flux.');
+  }
+
+  if (!analysisModel) {
+    throw new Error('OPENAI_ANALYSIS_MODEL is missing. Add it to .env.local and restart Flux.');
   }
 
   const client = new OpenAI({ apiKey });
@@ -311,6 +399,50 @@ function createOpenAIProvider(): AIProvider {
         throw new Error('OpenAI returned an empty transcript.');
       }
       return transcript;
+    },
+    async analyzeTranscript(transcript: string) {
+      const response = await client.responses.create({
+        model: analysisModel,
+        instructions:
+          'You turn captured transcripts into concise operator notes. Return only grounded facts from the transcript. Do not invent actions, dates, or details that are not supported.',
+        input: `Transcript:\n${transcript}`,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'flux_breakdown',
+            strict: true,
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['title', 'topline', 'next_steps'],
+              properties: {
+                title: {
+                  type: 'string',
+                  description: 'A short note title grounded in the transcript.'
+                },
+                topline: {
+                  type: 'string',
+                  description: 'Two or three sentences explaining the useful point of the transcript.'
+                },
+                next_steps: {
+                  type: 'array',
+                  maxItems: 6,
+                  items: { type: 'string' },
+                  description:
+                    'Concrete next actions explicitly implied by the transcript. Use an empty array if none exist.'
+                }
+              }
+            }
+          }
+        }
+      });
+
+      const text = stripJsonFences(response.output_text ?? '');
+      if (!text) {
+        throw new Error('OpenAI returned an empty analysis.');
+      }
+
+      return normalizeBreakdown(JSON.parse(text), analysisModel, transcript);
     }
   };
 }
@@ -329,14 +461,26 @@ function audioExtension(mimeType: string) {
 }
 
 function createMarkdownNote(note: FluxNoteSummary, transcript: string) {
+  const analysis = note.analysis;
+  const analysisModel = analysis ? `analysis_model: ${analysis.model}\n` : '';
+  const analysisSection = analysis
+    ? `## AI Analysis
+${analysis.topline.trim()}
+
+## Next Steps
+${analysis.nextSteps.length ? analysis.nextSteps.map((step) => `- [ ] ${step}`).join('\n') : '- [ ] No explicit next steps captured.'}
+
+`
+    : '';
+
   return `---
 title: "${note.title.replace(/"/g, '\\"')}"
 source: voice
 created: ${note.created}
 folder: ${note.folder}
----
+${analysisModel}---
 # ${note.title}
-## Transcript
+${analysisSection}## Transcript
 ${transcript.trim()}
 `;
 }
@@ -405,8 +549,10 @@ async function saveRecording(payload: SaveRecordingPayload) {
   const audioPath = path.join(audioDir, `recording.${audioExtension(mimeType)}`);
   writeFileSync(audioPath, audioBuffer);
 
-  const transcript = await createOpenAIProvider().transcribeAudio(audioPath, mimeType);
-  const title = buildTitle(transcript);
+  const provider = createOpenAIProvider();
+  const transcript = await provider.transcribeAudio(audioPath, mimeType);
+  const breakdown = await provider.analyzeTranscript(transcript);
+  const { title, ...analysis } = breakdown;
   const { noteId, notePath } = uniqueMarkdownPath(
     path.join(dataDir, 'Inbox'),
     `${formatDateSlug(created)}-${slugify(title)}`
@@ -417,6 +563,7 @@ async function saveRecording(payload: SaveRecordingPayload) {
     source: 'voice',
     created: created.toISOString(),
     folder: 'Inbox',
+    analysis,
     transcriptPreview: transcript.replace(/\s+/g, ' ').slice(0, 180)
   };
   writeFileSync(notePath, createMarkdownNote(note, transcript));
