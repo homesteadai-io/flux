@@ -10,12 +10,19 @@ interface FluxFolder {
   count: number;
 }
 
+interface FluxAnalysis {
+  model: string;
+  topline: string;
+  nextSteps: string[];
+}
+
 interface FluxNoteSummary {
   id: string;
   title: string;
   source: 'voice' | 'youtube';
   created: string;
   folder: string;
+  analysis?: FluxAnalysis;
   transcriptPreview: string;
 }
 

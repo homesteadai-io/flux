@@ -373,10 +373,17 @@ function NotePane({
   folders: FluxFolder[];
   onMoveNote: (targetFolder: string) => void;
 }) {
+  const [showTranscript, setShowTranscript] = useState(false);
   const title = selectedNote?.title ?? 'Record your first FLUX note';
+  const analysis = selectedNote?.analysis;
   const transcript =
     selectedNote?.transcriptPreview ??
     'A saved transcript will appear here after you stop recording.';
+  const nextSteps = analysis?.nextSteps.length
+    ? analysis.nextSteps
+    : selectedNote
+      ? ['No explicit next steps captured.']
+      : ['Record audio into a local file', 'OpenAI transcription writes markdown'];
 
   return (
     <section className="glass-pane note-pane" aria-label="Flux note detail">
@@ -417,29 +424,39 @@ function NotePane({
         </button>
       </div>
 
-      <DetailCard title="AI Analysis" icon={<IconSpark />} action={<IconChevron />}>
-        <p>Held for Phase 3. Phase 2 writes the real transcript to disk first.</p>
+      <DetailCard
+        title="AI Analysis"
+        icon={<IconSpark />}
+        action={analysis ? <span className="model-tag">{analysis.model}</span> : <IconChevron />}
+      >
+        <p>{analysis?.topline ?? 'Record a note to generate a grounded breakdown.'}</p>
       </DetailCard>
 
       <DetailCard title="Next Steps" icon={<IconCheck />} action={<IconChevron />}>
         <ul className="next-steps">
-          <li className={selectedNote ? 'done' : ''}>
-            <span>{selectedNote ? <IconCheck size={14} /> : null}</span>
-            Record audio into a local file
-          </li>
-          <li className={selectedNote ? 'done' : ''}>
-            <span>{selectedNote ? <IconCheck size={14} /> : null}</span>
-            OpenAI transcription writes markdown
-          </li>
-          <li>
-            <span />
-            Analysis and copy export are Phase 3
-          </li>
+          {nextSteps.map((step) => (
+            <li key={step} className={analysis ? '' : selectedNote ? 'done' : ''}>
+              <span>{analysis ? null : selectedNote ? <IconCheck size={14} /> : null}</span>
+              {step}
+            </li>
+          ))}
         </ul>
       </DetailCard>
 
-      <DetailCard title="Transcript" icon={<IconWave />} action={<span className="show-action">Show</span>}>
-        <p>{transcript}</p>
+      <DetailCard
+        title="Transcript"
+        icon={<IconWave />}
+        action={
+          <button
+            type="button"
+            className="show-action"
+            onClick={() => setShowTranscript((current) => !current)}
+          >
+            {showTranscript ? 'Hide' : 'Show'}
+          </button>
+        }
+      >
+        {showTranscript ? <p>{transcript}</p> : null}
       </DetailCard>
 
       <div className="action-grid">
