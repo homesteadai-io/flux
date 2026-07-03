@@ -41,6 +41,11 @@ type FluxSaveEnvResult =
   | { canceled: true }
   | { canceled: false; filePath: string; directory: string; overwritten: boolean };
 
+interface FluxCopyMarkdownResult {
+  noteId: string;
+  bytes: number;
+}
+
 interface FluxLibraryApi {
   list: () => Promise<FluxLibrarySnapshot>;
   createFolder: (name: string) => Promise<{ folder: string; library: FluxLibrarySnapshot }>;
@@ -48,6 +53,7 @@ interface FluxLibraryApi {
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) => Promise<FluxCaptureResult>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<FluxCaptureResult>;
   saveEnvLocal: (payload: { content: string }) => Promise<FluxSaveEnvResult>;
+  copyMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxCopyMarkdownResult>;
 }
 
 interface Window {

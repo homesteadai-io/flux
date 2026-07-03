@@ -795,6 +795,15 @@ svg path {
   cursor: pointer;
 }
 
+.export-row button:disabled {
+  opacity: 0.52;
+  cursor: default;
+}
+
+.export-row button:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
 .drag-handle {
   display: flex;
   align-items: center;
