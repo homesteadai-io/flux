@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
-import { GoogleGenAI } from '@google/genai';
+import OpenAI, { toFile } from 'openai';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -23,7 +23,8 @@ type WindowBounds = {
 type FluxSettings = {
   windowBounds?: WindowBounds;
   dataDir?: string;
-  modelId?: string;
+  transcriptionModelId?: string;
+  analysisModelId?: string;
 };
 
 type FluxFolder = {
@@ -54,13 +55,20 @@ type SaveRecordingPayload = {
   mimeType: unknown;
 };
 
+type AIProvider = {
+  transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
+};
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultBounds: WindowBounds = { width: 980, height: 660 };
 const defaultDataDir = path.join(os.homedir(), 'Flux');
 const settingsDir = path.join(defaultDataDir, '.flux');
 const settingsPath = path.join(settingsDir, 'settings.json');
-const defaultModelId = 'gemini-2.5-flash';
-const allowedLocalEnvKeys = new Set(['GEMINI_API_KEY', 'GOOGLE_API_KEY']);
+const allowedLocalEnvKeys = new Set([
+  'OPENAI_API_KEY',
+  'OPENAI_TRANSCRIPTION_MODEL',
+  'OPENAI_ANALYSIS_MODEL'
+]);
 const allowedAudioMimeTypes = new Set(['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav']);
 const maxAudioBytes = 25 * 1024 * 1024;
 
@@ -271,36 +279,40 @@ function buildTitle(transcript: string) {
   return title.length > 72 ? `${title.slice(0, 69)}...` : title;
 }
 
-async function transcribeAudio(audioPath: string, mimeType: string) {
-  const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
+function getTranscriptionModelId() {
+  return readSettings().transcriptionModelId ?? process.env.OPENAI_TRANSCRIPTION_MODEL;
+}
+
+function createOpenAIProvider(): AIProvider {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const transcriptionModel = getTranscriptionModelId();
+
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is missing. Add it to .env.local and restart Flux.');
+    throw new Error('OPENAI_API_KEY is missing. Add it to .env.local and restart Flux.');
   }
 
-  const model = readSettings().modelId ?? defaultModelId;
-  const ai = new GoogleGenAI({ apiKey });
-  const audioBase64 = readFileSync(audioPath).toString('base64');
-  const response = await ai.models.generateContent({
-    model,
-    contents: [
-      {
-        text:
-          'Transcribe this voice note verbatim. Return only the transcript text. Do not summarize or invent missing words.'
-      },
-      {
-        inlineData: {
-          mimeType,
-          data: audioBase64
-        }
+  if (!transcriptionModel) {
+    throw new Error('OPENAI_TRANSCRIPTION_MODEL is missing. Add it to .env.local and restart Flux.');
+  }
+
+  const client = new OpenAI({ apiKey });
+
+  return {
+    async transcribeAudio(audioPath: string, mimeType: string) {
+      const audioBuffer = readFileSync(audioPath);
+      const audioFile = await toFile(audioBuffer, path.basename(audioPath), { type: mimeType });
+      const response = await client.audio.transcriptions.create({
+        file: audioFile,
+        model: transcriptionModel
+      });
+
+      const transcript = response.text?.trim();
+      if (!transcript) {
+        throw new Error('OpenAI returned an empty transcript.');
       }
-    ]
-  });
-
-  const transcript = response.text?.trim();
-  if (!transcript) {
-    throw new Error('Gemini returned an empty transcript.');
-  }
-  return transcript;
+      return transcript;
+    }
+  };
 }
 
 function audioExtension(mimeType: string) {
@@ -393,7 +405,7 @@ async function saveRecording(payload: SaveRecordingPayload) {
   const audioPath = path.join(audioDir, `recording.${audioExtension(mimeType)}`);
   writeFileSync(audioPath, audioBuffer);
 
-  const transcript = await transcribeAudio(audioPath, mimeType);
+  const transcript = await createOpenAIProvider().transcribeAudio(audioPath, mimeType);
   const title = buildTitle(transcript);
   const { noteId, notePath } = uniqueMarkdownPath(
     path.join(dataDir, 'Inbox'),

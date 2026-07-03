@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.electron.json && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^2.10.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "openai": "^6.45.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.2",

@@ -429,7 +429,7 @@ function NotePane({
           </li>
           <li className={selectedNote ? 'done' : ''}>
             <span>{selectedNote ? <IconCheck size={14} /> : null}</span>
-            Gemini transcription writes markdown
+            OpenAI transcription writes markdown
           </li>
           <li>
             <span />
