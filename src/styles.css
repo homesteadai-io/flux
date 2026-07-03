@@ -20,7 +20,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -120,6 +121,7 @@ svg path {
 .window-controls button,
 .record-button,
 .url-bar button,
+.url-bar textarea,
 .back-button,
 .note-title button,
 .action-grid button,
@@ -446,42 +448,73 @@ svg path {
 .url-bar {
   min-height: 62px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 15px;
   align-items: center;
   margin: 0 22px 22px;
-  padding: 0 10px 0 18px;
+  padding: 10px 10px 10px 18px;
   border-radius: 16px;
   color: var(--text-muted);
   font-size: 16px;
 }
 
-.url-bar input {
+.url-bar textarea {
+  width: 100%;
+  min-height: 24px;
+  max-height: 82px;
   min-width: 0;
   border: 0;
   background: transparent;
   color: var(--text);
   outline: 0;
+  resize: none;
+  line-height: 1.45;
+  overflow-y: auto;
 }
 
-.url-bar input::placeholder {
+.url-bar textarea::placeholder {
   color: var(--text-muted);
 }
 
-.url-bar input:disabled {
+.url-bar textarea:disabled {
   color: var(--text-faint);
 }
 
+.url-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .url-bar button {
-  width: 42px;
   height: 42px;
-  display: grid;
+  display: inline-grid;
   place-items: center;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
-  transform: rotate(-90deg);
   cursor: pointer;
+}
+
+.youtube-import-button {
+  width: 42px;
+  display: grid;
+  border-radius: 50%;
+  transform: rotate(-90deg);
+}
+
+.env-save-button {
+  width: auto;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: 8px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.env-save-button span {
+  line-height: 1;
 }
 
 .url-bar button:disabled {

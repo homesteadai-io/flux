@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('fluxLibrary', {
     ipcRenderer.invoke('library:move-note', { noteId, targetFolder }),
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) =>
     ipcRenderer.invoke('capture:save-recording', payload),
-  saveYouTubeUrl: (payload: { url: string }) => ipcRenderer.invoke('capture:save-youtube-url', payload)
+  saveYouTubeUrl: (payload: { url: string }) => ipcRenderer.invoke('capture:save-youtube-url', payload),
+  saveEnvLocal: (payload: { content: string }) => ipcRenderer.invoke('capture:save-env-local', payload)
 });

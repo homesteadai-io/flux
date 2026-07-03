@@ -9,7 +9,7 @@ type IconProps = {
 };
 
 type TokenStyle = React.CSSProperties & Record<`--${string}`, string>;
-type CaptureStatus = 'idle' | 'recording' | 'saving' | 'importing' | 'error';
+type CaptureStatus = 'idle' | 'recording' | 'saving' | 'importing' | 'savingEnv' | 'error';
 
 const tokenStyle: TokenStyle = {
   '--glass-pane': tokens.glass.paneFill,
@@ -88,6 +88,16 @@ function IconChevron({ size = 18 }: IconProps) {
   return (
     <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none">
       <path d="m8 10 4 4 4-4" />
+    </svg>
+  );
+}
+
+function IconFile({ size = 18 }: IconProps) {
+  return (
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M6.75 3.75h7.4l3.1 3.1v13.4H6.75z" />
+      <path d="M14.25 3.95v3h2.95" />
+      <path d="M9.25 12.25h5.5M9.25 15.25h4" />
     </svg>
   );
 }
@@ -186,6 +196,9 @@ function statusCopy(status: CaptureStatus) {
   if (status === 'importing') {
     return 'Importing...';
   }
+  if (status === 'savingEnv') {
+    return 'Saving .env.local...';
+  }
   if (status === 'error') {
     return 'Needs attention';
   }
@@ -219,10 +232,12 @@ function CapturePane({
   captureStatus,
   elapsedSeconds,
   errorMessage,
+  envStatusMessage,
   onSelectFolder,
   onCreateFolder,
   onToggleRecording,
-  onSubmitYouTube
+  onSubmitYouTube,
+  onSaveEnvLocal
 }: {
   library: FluxLibrarySnapshot | null;
   selectedFolder: string;
@@ -230,17 +245,25 @@ function CapturePane({
   captureStatus: CaptureStatus;
   elapsedSeconds: number;
   errorMessage: string | null;
+  envStatusMessage: string | null;
   onSelectFolder: (folder: string) => void;
   onCreateFolder: (name: string) => void;
   onToggleRecording: () => void;
   onSubmitYouTube: (url: string) => void;
+  onSaveEnvLocal: (content: string) => Promise<boolean>;
 }) {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
-  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [pasteValue, setPasteValue] = useState('');
   const folders = library?.folders ?? [{ name: 'Inbox', count: 0 }];
+  const isBusy =
+    captureStatus === 'recording' ||
+    captureStatus === 'saving' ||
+    captureStatus === 'importing' ||
+    captureStatus === 'savingEnv';
   const preview =
     errorMessage ??
+    envStatusMessage ??
     selectedNote?.transcriptPreview ??
     'Tap record, say a thought, and Flux will write a real markdown note into your Inbox.';
 
@@ -257,12 +280,23 @@ function CapturePane({
 
   const submitYouTube = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const url = youtubeUrl.trim();
-    if (!url || captureStatus === 'recording' || captureStatus === 'saving' || captureStatus === 'importing') {
+    const url = pasteValue.trim();
+    if (!url || isBusy) {
       return;
     }
     onSubmitYouTube(url);
-    setYoutubeUrl('');
+    setPasteValue('');
+  };
+
+  const saveEnvLocal = async () => {
+    if (!pasteValue.trim() || isBusy) {
+      return;
+    }
+
+    const didSave = await onSaveEnvLocal(pasteValue);
+    if (didSave) {
+      setPasteValue('');
+    }
   };
 
   return (
@@ -314,7 +348,7 @@ function CapturePane({
           className={captureStatus === 'recording' ? 'record-button is-recording' : 'record-button'}
           aria-label={captureStatus === 'recording' ? 'Stop recording' : 'Start recording'}
           onClick={onToggleRecording}
-          disabled={captureStatus === 'saving' || captureStatus === 'importing'}
+          disabled={captureStatus === 'saving' || captureStatus === 'importing' || captureStatus === 'savingEnv'}
         >
           <span className="record-halo record-halo-one" />
           <span className="record-halo record-halo-two" />
@@ -338,6 +372,8 @@ function CapturePane({
           <span>
             {captureStatus === 'recording'
               ? 'Recording audio'
+              : captureStatus === 'savingEnv'
+                ? 'Writing .env.local'
               : selectedNote
                 ? `Latest in ${selectedNote.folder}`
                 : 'File-backed Inbox'}
@@ -348,20 +384,23 @@ function CapturePane({
 
       <form className="url-bar" onSubmit={submitYouTube}>
         <IconLink />
-        <input
-          value={youtubeUrl}
-          onChange={(event) => setYoutubeUrl(event.target.value)}
-          placeholder="Paste YouTube URL"
-          aria-label="YouTube URL"
-          disabled={captureStatus === 'recording' || captureStatus === 'saving' || captureStatus === 'importing'}
+        <textarea
+          value={pasteValue}
+          onChange={(event) => setPasteValue(event.target.value)}
+          placeholder="Paste YouTube URL or env text"
+          aria-label="YouTube URL or env text"
+          disabled={isBusy}
+          rows={1}
         />
-        <button
-          type="submit"
-          aria-label="Import YouTube transcript"
-          disabled={!youtubeUrl.trim() || captureStatus === 'recording' || captureStatus === 'saving' || captureStatus === 'importing'}
-        >
-          <IconChevron />
-        </button>
+        <div className="url-actions">
+          <button type="button" className="env-save-button" onClick={saveEnvLocal} disabled={!pasteValue.trim() || isBusy}>
+            <IconFile />
+            <span>Save as .env</span>
+          </button>
+          <button type="submit" className="youtube-import-button" aria-label="Import YouTube transcript" disabled={!pasteValue.trim() || isBusy}>
+            <IconChevron />
+          </button>
+        </div>
       </form>
     </section>
   );
@@ -528,6 +567,7 @@ function App() {
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [envStatusMessage, setEnvStatusMessage] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -662,15 +702,17 @@ function App() {
       stopRecording();
       return;
     }
-    if (captureStatus === 'saving') {
+    if (captureStatus === 'saving' || captureStatus === 'importing' || captureStatus === 'savingEnv') {
       return;
     }
+    setEnvStatusMessage(null);
     void startRecording();
   }, [captureStatus, startRecording, stopRecording]);
 
   const submitYouTube = useCallback(async (url: string) => {
     try {
       setErrorMessage(null);
+      setEnvStatusMessage(null);
       setCaptureStatus('importing');
       const result = await window.fluxLibrary.saveYouTubeUrl({ url });
       setLibrary(result.library);
@@ -684,9 +726,31 @@ function App() {
     }
   }, []);
 
+  const saveEnvLocal = useCallback(async (content: string) => {
+    try {
+      setErrorMessage(null);
+      setEnvStatusMessage(null);
+      setCaptureStatus('savingEnv');
+      const result = await window.fluxLibrary.saveEnvLocal({ content });
+      setCaptureStatus('idle');
+
+      if (result.canceled) {
+        return false;
+      }
+
+      setEnvStatusMessage(`Saved .env.local to ${result.directory}.`);
+      return true;
+    } catch (error) {
+      setCaptureStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not save .env.local.');
+      return false;
+    }
+  }, []);
+
   const createFolder = useCallback(async (name: string) => {
     try {
       setErrorMessage(null);
+      setEnvStatusMessage(null);
       const result = await window.fluxLibrary.createFolder(name);
       setLibrary(result.library);
       setSelectedFolder(result.folder);
@@ -707,6 +771,7 @@ function App() {
 
     try {
       setErrorMessage(null);
+      setEnvStatusMessage(null);
       const snapshot = await window.fluxLibrary.moveNote(selectedNote.id, targetFolder);
       setLibrary(snapshot);
       setSelectedFolder(targetFolder.trim());
@@ -726,10 +791,12 @@ function App() {
         captureStatus={captureStatus}
         elapsedSeconds={elapsedSeconds}
         errorMessage={errorMessage}
+        envStatusMessage={envStatusMessage}
         onSelectFolder={setSelectedFolder}
         onCreateFolder={createFolder}
         onToggleRecording={toggleRecording}
         onSubmitYouTube={submitYouTube}
+        onSaveEnvLocal={saveEnvLocal}
       />
       <NotePane
         selectedNote={selectedNote}

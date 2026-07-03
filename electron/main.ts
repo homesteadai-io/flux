@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
 import OpenAI, { toFile } from 'openai';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ type WindowBounds = {
 type FluxSettings = {
   windowBounds?: WindowBounds;
   dataDir?: string;
+  lastEnvDirectory?: string;
   transcriptionModelId?: string;
   analysisModelId?: string;
 };
@@ -67,6 +68,14 @@ type SaveRecordingPayload = {
 type SaveYouTubePayload = {
   url: unknown;
 };
+
+type SaveEnvPayload = {
+  content: unknown;
+};
+
+type SaveEnvResult =
+  | { canceled: true }
+  | { canceled: false; filePath: string; directory: string; overwritten: boolean };
 
 type AIProvider = {
   transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
@@ -661,6 +670,63 @@ async function saveYouTubeUrl(payload: SaveYouTubePayload) {
   });
 }
 
+async function saveEnvLocal(event: IpcMainInvokeEvent, payload: SaveEnvPayload): Promise<SaveEnvResult> {
+  assertTrustedSender(event);
+
+  if (typeof payload.content !== 'string' || !payload.content.trim()) {
+    throw new Error('Paste env text first.');
+  }
+
+  const settings = readSettings();
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const defaultPath =
+    settings.lastEnvDirectory && existsSync(settings.lastEnvDirectory)
+      ? settings.lastEnvDirectory
+      : undefined;
+  const openDialogOptions: Electron.OpenDialogOptions = {
+    title: 'Choose project folder for .env.local',
+    defaultPath,
+    properties: ['openDirectory', 'createDirectory']
+  };
+
+  const selection = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, openDialogOptions)
+    : await dialog.showOpenDialog(openDialogOptions);
+
+  if (selection.canceled || selection.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const directory = selection.filePaths[0];
+  const filePath = path.join(directory, '.env.local');
+  const nextSettings = { ...readSettings(), lastEnvDirectory: directory };
+  writeSettings(nextSettings);
+
+  const alreadyExists = existsSync(filePath);
+  if (alreadyExists) {
+    const overwriteOptions: Electron.MessageBoxOptions = {
+      type: 'warning',
+      title: 'Overwrite .env.local?',
+      message: '.env.local already exists in this folder.',
+      detail: filePath,
+      buttons: ['Cancel', 'Overwrite'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    };
+    const overwrite = parentWindow
+      ? await dialog.showMessageBox(parentWindow, overwriteOptions)
+      : await dialog.showMessageBox(overwriteOptions);
+
+    if (overwrite.response !== 1) {
+      return { canceled: true };
+    }
+  }
+
+  writeFileSync(filePath, payload.content);
+  return { canceled: false, filePath, directory, overwritten: alreadyExists };
+}
+
 function moveNote(noteId: string, targetFolder: string) {
   const dataDir = ensureLibrary();
   const folder = sanitizeFolderName(targetFolder);
@@ -802,6 +868,10 @@ app.whenReady().then(() => {
   ipcMain.handle('capture:save-youtube-url', (event, payload: SaveYouTubePayload) => {
     assertTrustedSender(event);
     return saveYouTubeUrl(payload);
+  });
+
+  ipcMain.handle('capture:save-env-local', (event, payload: SaveEnvPayload) => {
+    return saveEnvLocal(event, payload);
   });
 
   createWindow();
