@@ -22,6 +22,7 @@ interface FluxNoteSummary {
   source: 'voice' | 'youtube';
   created: string;
   folder: string;
+  url?: string;
   analysis?: FluxAnalysis;
   transcriptPreview: string;
 }
@@ -41,6 +42,7 @@ interface FluxLibraryApi {
   createFolder: (name: string) => Promise<{ folder: string; library: FluxLibrarySnapshot }>;
   moveNote: (noteId: string, targetFolder: string) => Promise<FluxLibrarySnapshot>;
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) => Promise<FluxCaptureResult>;
+  saveYouTubeUrl: (payload: { url: string }) => Promise<FluxCaptureResult>;
 }
 
 interface Window {

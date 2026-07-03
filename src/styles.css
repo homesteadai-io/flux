@@ -456,6 +456,22 @@ svg path {
   font-size: 16px;
 }
 
+.url-bar input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: 0;
+}
+
+.url-bar input::placeholder {
+  color: var(--text-muted);
+}
+
+.url-bar input:disabled {
+  color: var(--text-faint);
+}
+
 .url-bar button {
   width: 42px;
   height: 42px;
@@ -466,6 +482,11 @@ svg path {
   background: rgba(255, 255, 255, 0.12);
   transform: rotate(-90deg);
   cursor: pointer;
+}
+
+.url-bar button:disabled {
+  opacity: 0.48;
+  cursor: default;
 }
 
 .note-pane {
