@@ -434,17 +434,29 @@ function NotePane({
   folders,
   onMoveNote,
   onCopyMarkdown,
-  onExportMarkdown
+  onExportMarkdown,
+  onLoadChat,
+  onSendChat
 }: {
   selectedNote: FluxNoteSummary | null;
   folders: FluxFolder[];
   onMoveNote: (targetFolder: string) => void;
   onCopyMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
   onExportMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
+  onLoadChat: (note: FluxNoteSummary) => Promise<FluxChatMessage[]>;
+  onSendChat: (note: FluxNoteSummary, message: string) => Promise<FluxChatMessage[] | null>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
   const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [chatMessages, setChatMessages] = useState<FluxChatMessage[]>([]);
+  const [isLoadingChat, setIsLoadingChat] = useState(false);
+  const [isSendingChat, setIsSendingChat] = useState(false);
+  const chatThreadRef = useRef<HTMLDivElement | null>(null);
+  const selectedNoteKey = selectedNote ? `${selectedNote.folder}/${selectedNote.id}` : '';
+  const activeNoteKeyRef = useRef(selectedNoteKey);
   const title = selectedNote?.title ?? 'Record your first FLUX note';
   const analysis = selectedNote?.analysis;
   const transcript =
@@ -459,7 +471,50 @@ function NotePane({
   useEffect(() => {
     setCopyStatus('idle');
     setExportStatus('idle');
+    setIsChatOpen(false);
+    setChatInput('');
+    setChatMessages([]);
+    setIsLoadingChat(false);
+    setIsSendingChat(false);
   }, [selectedNote?.id, selectedNote?.folder]);
+
+  useEffect(() => {
+    activeNoteKeyRef.current = selectedNoteKey;
+  }, [selectedNoteKey]);
+
+  useEffect(() => {
+    if (!selectedNote || !isChatOpen) {
+      return;
+    }
+
+    let canceled = false;
+    setIsLoadingChat(true);
+    void onLoadChat(selectedNote)
+      .then((messages) => {
+        if (!canceled) {
+          setChatMessages(messages);
+          setIsLoadingChat(false);
+        }
+      })
+      .catch(() => {
+        if (!canceled) {
+          setIsLoadingChat(false);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [isChatOpen, onLoadChat, selectedNote]);
+
+  useEffect(() => {
+    if (isChatOpen) {
+      chatThreadRef.current?.scrollTo({
+        top: chatThreadRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [chatMessages.length, isChatOpen]);
 
   const copyMarkdown = async () => {
     if (!selectedNote || copyStatus === 'copying') {
@@ -479,6 +534,29 @@ function NotePane({
     setExportStatus('exporting');
     const exported = await onExportMarkdown(selectedNote);
     setExportStatus(exported ? 'exported' : 'idle');
+  };
+
+  const submitChat = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const question = chatInput.trim();
+    if (!selectedNote || !question || isLoadingChat || isSendingChat) {
+      return;
+    }
+
+    const sentNoteKey = selectedNoteKey;
+    setIsSendingChat(true);
+    setChatInput('');
+    const messages = await onSendChat(selectedNote, question);
+    if (activeNoteKeyRef.current !== sentNoteKey) {
+      return;
+    }
+
+    if (messages) {
+      setChatMessages(messages);
+    } else {
+      setChatInput(question);
+    }
+    setIsSendingChat(false);
   };
 
   return (
@@ -563,14 +641,50 @@ function NotePane({
             <small>Held for Phase 5</small>
           </span>
         </button>
-        <button type="button" disabled>
+        <button
+          type="button"
+          onClick={() => setIsChatOpen((current) => !current)}
+          disabled={!selectedNote}
+        >
           <span className="chat-icon" />
           <span>
             <strong>Chat</strong>
-            <small>Held for Phase 5</small>
+            <small>{selectedNote ? 'Ask about this note' : 'Held for Phase 5'}</small>
           </span>
         </button>
       </div>
+
+      {isChatOpen ? (
+        <section className="chat-panel" aria-label="Per-note chat">
+          <div className="chat-thread" ref={chatThreadRef}>
+            {isLoadingChat ? (
+              <p className="chat-empty">Loading note chat...</p>
+            ) : chatMessages.length ? (
+              chatMessages.map((message) => (
+                <article key={message.id} className={`chat-message is-${message.role}`}>
+                  <strong>{message.role === 'user' ? 'You' : 'Flux'}</strong>
+                  <p>{message.content}</p>
+                </article>
+              ))
+            ) : (
+              <p className="chat-empty">Ask from this note only. Flux will say when the note is thin.</p>
+            )}
+          </div>
+          <form className="chat-form" onSubmit={submitChat}>
+            <textarea
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              placeholder="Ask this note..."
+              aria-label="Ask this note"
+              rows={2}
+              disabled={isLoadingChat || isSendingChat}
+            />
+            <button type="submit" disabled={!chatInput.trim() || isLoadingChat || isSendingChat}>
+              {isSendingChat ? 'Asking...' : 'Ask'}
+            </button>
+          </form>
+        </section>
+      ) : null}
 
       <footer className="export-row">
         <strong>Export</strong>
@@ -828,6 +942,39 @@ function App() {
     }
   }, []);
 
+  const loadNoteChat = useCallback(async (note: FluxNoteSummary) => {
+    try {
+      setErrorMessage(null);
+      setEnvStatusMessage(null);
+      const result = await window.fluxLibrary.getNoteChat({
+        noteId: note.id,
+        folder: note.folder
+      });
+      return result.messages;
+    } catch (error) {
+      setCaptureStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not load note chat.');
+      return [];
+    }
+  }, []);
+
+  const sendNoteChat = useCallback(async (note: FluxNoteSummary, message: string) => {
+    try {
+      setErrorMessage(null);
+      setEnvStatusMessage(null);
+      const result = await window.fluxLibrary.sendNoteChat({
+        noteId: note.id,
+        folder: note.folder,
+        message
+      });
+      return result.messages;
+    } catch (error) {
+      setCaptureStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not send note chat.');
+      return null;
+    }
+  }, []);
+
   const createFolder = useCallback(async (name: string) => {
     try {
       setErrorMessage(null);
@@ -853,7 +1000,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      const snapshot = await window.fluxLibrary.moveNote(selectedNote.id, targetFolder);
+      const snapshot = await window.fluxLibrary.moveNote(selectedNote.id, selectedNote.folder, targetFolder);
       setLibrary(snapshot);
       setSelectedFolder(targetFolder.trim());
       setSelectedNoteId(selectedNote.id);
@@ -885,6 +1032,8 @@ function App() {
         onMoveNote={moveSelectedNote}
         onCopyMarkdown={copyMarkdown}
         onExportMarkdown={exportMarkdown}
+        onLoadChat={loadNoteChat}
+        onSendChat={sendNoteChat}
       />
     </main>
   );

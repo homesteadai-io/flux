@@ -8,8 +8,8 @@ contextBridge.exposeInMainWorld('fluxWindow', {
 contextBridge.exposeInMainWorld('fluxLibrary', {
   list: () => ipcRenderer.invoke('library:list'),
   createFolder: (name: string) => ipcRenderer.invoke('library:create-folder', { name }),
-  moveNote: (noteId: string, targetFolder: string) =>
-    ipcRenderer.invoke('library:move-note', { noteId, targetFolder }),
+  moveNote: (noteId: string, sourceFolder: string, targetFolder: string) =>
+    ipcRenderer.invoke('library:move-note', { noteId, sourceFolder, targetFolder }),
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) =>
     ipcRenderer.invoke('capture:save-recording', payload),
   saveYouTubeUrl: (payload: { url: string }) => ipcRenderer.invoke('capture:save-youtube-url', payload),
@@ -17,5 +17,9 @@ contextBridge.exposeInMainWorld('fluxLibrary', {
   copyMarkdown: (payload: { noteId: string; folder: string }) =>
     ipcRenderer.invoke('note:copy-markdown', payload),
   exportMarkdown: (payload: { noteId: string; folder: string }) =>
-    ipcRenderer.invoke('note:export-markdown', payload)
+    ipcRenderer.invoke('note:export-markdown', payload),
+  getNoteChat: (payload: { noteId: string; folder: string }) =>
+    ipcRenderer.invoke('note:get-chat', payload),
+  sendNoteChat: (payload: { noteId: string; folder: string; message: string }) =>
+    ipcRenderer.invoke('note:send-chat', payload)
 });
