@@ -738,13 +738,13 @@ svg path {
 
 .action-grid strong,
 .export-row strong,
-.drag-handle strong {
+.export-folder-button strong {
   display: block;
   font-size: 15px;
 }
 
 .action-grid small,
-.drag-handle small {
+.export-folder-button small {
   display: block;
   margin-top: 3px;
   color: var(--text-muted);
@@ -804,11 +804,9 @@ svg path {
   background: rgba(255, 255, 255, 0.16);
 }
 
-.drag-handle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: rgba(255, 255, 255, 0.92);
+.export-folder-button {
+  min-width: 168px;
+  justify-content: flex-start;
 }
 
 @keyframes pulse {
