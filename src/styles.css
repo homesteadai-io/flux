@@ -19,7 +19,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -121,9 +122,10 @@ svg path {
 .url-bar button,
 .back-button,
 .note-title button,
-.collapsed-row,
 .action-grid button,
-.export-row button {
+.export-row button,
+.folder-create,
+.folder-select select {
   -webkit-app-region: no-drag;
 }
 
@@ -228,6 +230,49 @@ svg path {
   border-radius: var(--radius-pill);
   background: var(--tone, rgba(255, 255, 255, 0.18));
   font-size: 12px;
+}
+
+.chip.is-selected {
+  border-color: rgba(255, 255, 255, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 0 0 1px rgba(91, 220, 227, 0.14);
+}
+
+.folder-create {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  margin: 10px 22px 0;
+}
+
+.folder-create input,
+.folder-create button {
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  outline: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.folder-create input {
+  min-width: 0;
+  padding: 0 13px;
+}
+
+.folder-create input::placeholder {
+  color: var(--text-faint);
+}
+
+.folder-create button {
+  padding: 0 14px;
+  cursor: pointer;
 }
 
 .icon-pill {
@@ -453,6 +498,25 @@ svg path {
   border-radius: 13px;
   color: var(--text);
   cursor: pointer;
+}
+
+.folder-select {
+  padding: 0 12px;
+}
+
+.folder-select select {
+  min-width: 88px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: 0;
+  cursor: pointer;
+  appearance: none;
+}
+
+.folder-select select:disabled {
+  color: var(--text-muted);
+  cursor: default;
 }
 
 .back-button span {
