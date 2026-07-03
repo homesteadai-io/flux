@@ -13,6 +13,7 @@ import OpenAI, { toFile } from 'openai';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   copyFileSync,
@@ -66,6 +67,13 @@ type FluxNoteRecord = FluxNoteSummary & {
   path: string;
 };
 
+type FluxChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created: string;
+};
+
 type FluxLibrarySnapshot = {
   folders: FluxFolder[];
   notes: FluxNoteSummary[];
@@ -93,6 +101,16 @@ type CopyMarkdownPayload = {
   folder: unknown;
 };
 
+type MoveNotePayload = {
+  noteId: unknown;
+  sourceFolder: unknown;
+  targetFolder: unknown;
+};
+
+type NoteChatPayload = CopyMarkdownPayload & {
+  message?: unknown;
+};
+
 type CopyMarkdownResult = {
   noteId: string;
   bytes: number;
@@ -105,6 +123,7 @@ type ExportMarkdownResult =
 type AIProvider = {
   transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
   analyzeTranscript: (transcript: string) => Promise<FluxAnalysis & { title: string }>;
+  chatWithNote: (noteMarkdown: string, history: FluxChatMessage[], message: string) => Promise<string>;
 };
 
 type TranscriptEngineResult =
@@ -127,6 +146,7 @@ const defaultMarkdownExportDir = path.join(
 );
 const settingsDir = path.join(defaultDataDir, '.flux');
 const settingsPath = path.join(settingsDir, 'settings.json');
+const maxChatNoteBytes = 400 * 1024;
 const allowedLocalEnvKeys = new Set([
   'OPENAI_API_KEY',
   'OPENAI_TRANSCRIPTION_MODEL',
@@ -398,6 +418,86 @@ function findNoteRecord(noteId: unknown, folder: unknown) {
   return note;
 }
 
+function sanitizeSidecarFileName(value: string) {
+  const cleaned = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim();
+  if (!cleaned || cleaned.startsWith('.')) {
+    throw new Error('Note sidecar name needs plain visible characters.');
+  }
+  return cleaned.slice(0, 96);
+}
+
+function getChatSidecarPath(note: FluxNoteRecord, folder = note.folder) {
+  const dataDir = ensureLibrary();
+  const chatDir = path.join(dataDir, '.flux', 'chat', sanitizeFolderName(folder));
+  mkdirSync(chatDir, { recursive: true });
+  return path.join(chatDir, `${sanitizeSidecarFileName(note.id)}.json`);
+}
+
+function normalizeChatMessages(value: unknown): FluxChatMessage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((message): message is FluxChatMessage => {
+      if (!message || typeof message !== 'object') {
+        return false;
+      }
+      const candidate = message as Record<string, unknown>;
+      return (
+        typeof candidate.id === 'string' &&
+        (candidate.role === 'user' || candidate.role === 'assistant') &&
+        typeof candidate.content === 'string' &&
+        typeof candidate.created === 'string'
+      );
+    })
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content.slice(0, 6000),
+      created: message.created
+    }));
+}
+
+function readChatHistory(note: FluxNoteRecord) {
+  const chatPath = getChatSidecarPath(note);
+  if (!existsSync(chatPath)) {
+    return [];
+  }
+
+  try {
+    const raw = JSON.parse(readFileSync(chatPath, 'utf8')) as { messages?: unknown };
+    return normalizeChatMessages(raw.messages);
+  } catch {
+    const corruptPath = `${chatPath}.corrupt-${Date.now()}.json`;
+    renameSync(chatPath, corruptPath);
+    throw new Error(`Could not read chat history. Backed up the corrupt sidecar to ${path.basename(corruptPath)}.`);
+  }
+}
+
+function writeChatHistory(note: FluxNoteRecord, messages: FluxChatMessage[]) {
+  const chatPath = getChatSidecarPath(note);
+  writeFileSync(chatPath, `${JSON.stringify({ messages }, null, 2)}\n`);
+}
+
+function moveChatSidecar(note: FluxNoteRecord, targetFolder: string) {
+  const currentPath = getChatSidecarPath(note);
+  if (!existsSync(currentPath)) {
+    return;
+  }
+
+  const nextPath = getChatSidecarPath(note, targetFolder);
+  if (path.normalize(currentPath) === path.normalize(nextPath)) {
+    return;
+  }
+
+  if (existsSync(nextPath)) {
+    throw new Error(`Chat history for ${note.id}.md already exists in ${targetFolder}.`);
+  }
+
+  renameSync(currentPath, nextPath);
+}
+
 function formatDateSlug(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -555,6 +655,24 @@ function createOpenAIProvider(): AIProvider {
       }
 
       return normalizeBreakdown(JSON.parse(text), analysisModel, transcript);
+    },
+    async chatWithNote(noteMarkdown: string, history: FluxChatMessage[], message: string) {
+      const historyText = history
+        .slice(-12)
+        .map((entry) => `${entry.role === 'user' ? 'User' : 'Flux'}: ${entry.content}`)
+        .join('\n\n');
+      const response = await client.responses.create({
+        model: analysisModel,
+        instructions:
+          'You are Flux note chat. Answer only from the provided note markdown and chat history. If the note does not support an answer, say what is missing. Be concise and practical.',
+        input: `NOTE MARKDOWN:\n${noteMarkdown}\n\nCHAT HISTORY:\n${historyText || '(none)'}\n\nUSER QUESTION:\n${message}`
+      });
+
+      const answer = response.output_text?.trim();
+      if (!answer) {
+        throw new Error('OpenAI returned an empty chat answer.');
+      }
+      return answer;
     }
   };
 }
@@ -791,6 +909,48 @@ function copyMarkdown(payload: CopyMarkdownPayload): CopyMarkdownResult {
   };
 }
 
+function getNoteChat(payload: CopyMarkdownPayload) {
+  const note = findNoteRecord(payload.noteId, payload.folder);
+  return { messages: readChatHistory(note) };
+}
+
+async function sendNoteChat(payload: NoteChatPayload) {
+  const note = findNoteRecord(payload.noteId, payload.folder);
+  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+  if (!message) {
+    throw new Error('Ask a note question first.');
+  }
+  if (message.length > 2000) {
+    throw new Error('Keep note chat questions under 2,000 characters.');
+  }
+  if (statSync(note.path).size > maxChatNoteBytes) {
+    throw new Error('This note is too large for Phase 5 chat. Copy/export still works.');
+  }
+
+  const history = readChatHistory(note);
+  const now = new Date().toISOString();
+  const userMessage: FluxChatMessage = {
+    id: randomUUID(),
+    role: 'user',
+    content: message,
+    created: now
+  };
+
+  const provider = createOpenAIProvider();
+  const noteMarkdown = readFileSync(note.path, 'utf8');
+  const answer = await provider.chatWithNote(noteMarkdown, history, message);
+  const assistantMessage: FluxChatMessage = {
+    id: randomUUID(),
+    role: 'assistant',
+    content: answer,
+    created: new Date().toISOString()
+  };
+  const messages = [...history, userMessage, assistantMessage];
+  writeChatHistory(note, messages);
+
+  return { messages };
+}
+
 async function exportMarkdown(event: IpcMainInvokeEvent, payload: CopyMarkdownPayload): Promise<ExportMarkdownResult> {
   assertTrustedSender(event);
   const note = findNoteRecord(payload.noteId, payload.folder);
@@ -830,33 +990,55 @@ async function exportMarkdown(event: IpcMainInvokeEvent, payload: CopyMarkdownPa
   return { canceled: false, filePath, directory, overwritten: alreadyExists };
 }
 
-function moveNote(noteId: string, targetFolder: string) {
+function moveNote(payload: MoveNotePayload) {
   const dataDir = ensureLibrary();
-  const folder = sanitizeFolderName(targetFolder);
+  if (typeof payload.targetFolder !== 'string' || !payload.targetFolder.trim()) {
+    throw new Error('Choose a target folder first.');
+  }
+  const folder = sanitizeFolderName(payload.targetFolder);
   const targetDir = path.join(dataDir, folder);
   mkdirSync(targetDir, { recursive: true });
 
-  const current = listNoteRecords(dataDir).find((note) => note.id === noteId);
-  if (!current) {
-    throw new Error(`Could not find note ${noteId}.`);
-  }
+  const current = findNoteRecord(payload.noteId, payload.sourceFolder);
 
-  const targetPath = path.join(targetDir, `${noteId}.md`);
+  const targetPath = path.join(targetDir, `${current.id}.md`);
   if (path.normalize(current.path) === path.normalize(targetPath)) {
     return listLibrary();
   }
 
   if (existsSync(targetPath)) {
-    throw new Error(`A note named ${noteId}.md already exists in ${folder}.`);
+    throw new Error(`A note named ${current.id}.md already exists in ${folder}.`);
   }
 
+  const chatSourcePath = getChatSidecarPath(current);
+  const chatTargetPath = getChatSidecarPath(current, folder);
+  const hasChatSidecar = existsSync(chatSourcePath);
+  if (hasChatSidecar && existsSync(chatTargetPath)) {
+    throw new Error(`Chat history for ${current.id}.md already exists in ${folder}.`);
+  }
+
+  const originalMarkdown = readFileSync(current.path, 'utf8');
   renameSync(current.path, targetPath);
 
-  const markdown = readFileSync(targetPath, 'utf8').replace(
-    /^folder: .+$/m,
-    `folder: ${folder}`
-  );
-  writeFileSync(targetPath, markdown);
+  try {
+    const markdown = originalMarkdown.replace(
+      /^folder: .+$/m,
+      `folder: ${folder}`
+    );
+    writeFileSync(targetPath, markdown);
+    moveChatSidecar(current, folder);
+  } catch (error) {
+    try {
+      if (existsSync(targetPath) && !existsSync(current.path)) {
+        renameSync(targetPath, current.path);
+        writeFileSync(current.path, originalMarkdown);
+      }
+    } catch {
+      throw error;
+    }
+    throw error;
+  }
+
   return listLibrary();
 }
 
@@ -957,9 +1139,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     'library:move-note',
-    (event, payload: { noteId: string; targetFolder: string }) => {
+    (event, payload: MoveNotePayload) => {
       assertTrustedSender(event);
-      return moveNote(payload.noteId, payload.targetFolder);
+      return moveNote(payload);
     }
   );
 
@@ -984,6 +1166,16 @@ app.whenReady().then(() => {
 
   ipcMain.handle('note:export-markdown', (event, payload: CopyMarkdownPayload) => {
     return exportMarkdown(event, payload);
+  });
+
+  ipcMain.handle('note:get-chat', (event, payload: CopyMarkdownPayload) => {
+    assertTrustedSender(event);
+    return getNoteChat(payload);
+  });
+
+  ipcMain.handle('note:send-chat', (event, payload: NoteChatPayload) => {
+    assertTrustedSender(event);
+    return sendNoteChat(payload);
   });
 
   createWindow();
