@@ -1,8 +1,8 @@
 import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
 import OpenAI, { toFile } from 'openai';
-import { fetchTranscript, type TranscriptResponse } from 'youtube-transcript';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import {
   existsSync,
   mkdirSync,
@@ -73,7 +73,15 @@ type AIProvider = {
   analyzeTranscript: (transcript: string) => Promise<FluxAnalysis & { title: string }>;
 };
 
+type TranscriptEngineResult =
+  | { ok: true; transcript: string }
+  | { ok: false; reason: string; message: string; detail?: string };
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const transcriptEngine = require(path.join(__dirname, '../scripts/transcript.cjs')) as {
+  getCleanTranscript: (url: string) => Promise<TranscriptEngineResult>;
+};
 const defaultBounds: WindowBounds = { width: 980, height: 660 };
 const defaultDataDir = path.join(os.homedir(), 'Flux');
 const settingsDir = path.join(defaultDataDir, '.flux');
@@ -359,42 +367,6 @@ function normalizeYouTubeUrl(value: unknown) {
   return parsed.toString();
 }
 
-function formatTimestamp(seconds: number) {
-  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  const totalSeconds = Math.floor(safeSeconds);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const remainingSeconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds
-      .toString()
-      .padStart(2, '0')}`;
-  }
-
-  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-}
-
-function transcriptOffsetSeconds(segment: TranscriptResponse) {
-  return segment.offset > 1000 ? segment.offset / 1000 : segment.offset;
-}
-
-function formatTranscriptSegments(segments: TranscriptResponse[]) {
-  return segments
-    .map((segment) => `[${formatTimestamp(transcriptOffsetSeconds(segment))}] ${segment.text.trim()}`)
-    .filter((line) => line.replace(/^\[[^\]]+\]\s*/, '').trim())
-    .join('\n');
-}
-
-function plainTranscriptText(segments: TranscriptResponse[]) {
-  return segments
-    .map((segment) => segment.text.trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function buildTitle(transcript: string) {
   const words = transcript.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   if (words.length === 0) {
@@ -675,29 +647,16 @@ async function saveRecording(payload: SaveRecordingPayload) {
 
 async function saveYouTubeUrl(payload: SaveYouTubePayload) {
   const url = normalizeYouTubeUrl(payload.url);
-  let segments: TranscriptResponse[];
+  const result = await transcriptEngine.getCleanTranscript(url);
 
-  try {
-    segments = await fetchTranscript(url);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : 'Could not fetch captions.';
-    throw new Error(`Could not fetch YouTube captions for ${url}. ${detail}`);
-  }
-
-  if (segments.length === 0) {
-    throw new Error(`Could not fetch YouTube captions for ${url}. No captions were returned.`);
-  }
-
-  const plainTranscript = plainTranscriptText(segments);
-  const timestampedTranscript = formatTranscriptSegments(segments);
-  if (!plainTranscript || !timestampedTranscript) {
-    throw new Error(`Could not fetch YouTube captions for ${url}. Captions were empty.`);
+  if (!result.ok) {
+    throw new Error(`Could not fetch YouTube captions for ${url}. ${result.message}`);
   }
 
   return writeAnalyzedNote({
     source: 'youtube',
-    transcriptForAnalysis: plainTranscript,
-    transcriptForMarkdown: timestampedTranscript,
+    transcriptForAnalysis: result.transcript,
+    transcriptForMarkdown: result.transcript,
     url
   });
 }
