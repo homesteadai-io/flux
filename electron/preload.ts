@@ -4,3 +4,12 @@ contextBridge.exposeInMainWorld('fluxWindow', {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   close: () => ipcRenderer.invoke('window:close')
 });
+
+contextBridge.exposeInMainWorld('fluxLibrary', {
+  list: () => ipcRenderer.invoke('library:list'),
+  createFolder: (name: string) => ipcRenderer.invoke('library:create-folder', { name }),
+  moveNote: (noteId: string, targetFolder: string) =>
+    ipcRenderer.invoke('library:move-note', { noteId, targetFolder }),
+  saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) =>
+    ipcRenderer.invoke('capture:save-recording', payload)
+});

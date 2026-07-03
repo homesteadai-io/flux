@@ -13,6 +13,6 @@ npm run dev
 
 ## Secrets
 
-Copy `.env.example` to `.env.local` and set `GEMINI_API_KEY` when AI phases begin.
+Copy `.env.example` to `.env.local` and set `OPENAI_API_KEY` plus the model config values when AI phases begin.
 
 The key must stay in the main process only. Do not commit `.env.local`.
