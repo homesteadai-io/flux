@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
 import OpenAI, { toFile } from 'openai';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +76,16 @@ type SaveEnvPayload = {
 type SaveEnvResult =
   | { canceled: true }
   | { canceled: false; filePath: string; directory: string; overwritten: boolean };
+
+type CopyMarkdownPayload = {
+  noteId: unknown;
+  folder: unknown;
+};
+
+type CopyMarkdownResult = {
+  noteId: string;
+  bytes: number;
+};
 
 type AIProvider = {
   transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
@@ -343,6 +353,27 @@ function listLibrary(): FluxLibrarySnapshot {
     folders: folderSummaries,
     notes: listNoteRecords(dataDir).map(toPublicNote)
   };
+}
+
+function findNoteRecord(noteId: unknown, folder: unknown) {
+  if (typeof noteId !== 'string' || !noteId.trim()) {
+    throw new Error('Choose a note first.');
+  }
+
+  if (typeof folder !== 'string' || !folder.trim()) {
+    throw new Error('Choose a note folder first.');
+  }
+
+  const normalizedFolder = sanitizeFolderName(folder);
+  const note = listNoteRecords().find(
+    (record) => record.id === noteId.trim() && record.folder === normalizedFolder
+  );
+
+  if (!note) {
+    throw new Error(`Could not find ${noteId}.md in ${normalizedFolder}.`);
+  }
+
+  return note;
 }
 
 function formatDateSlug(date: Date) {
@@ -727,6 +758,17 @@ async function saveEnvLocal(event: IpcMainInvokeEvent, payload: SaveEnvPayload):
   return { canceled: false, filePath, directory, overwritten: alreadyExists };
 }
 
+function copyMarkdown(payload: CopyMarkdownPayload): CopyMarkdownResult {
+  const note = findNoteRecord(payload.noteId, payload.folder);
+  const markdown = readFileSync(note.path, 'utf8');
+  clipboard.writeText(markdown);
+
+  return {
+    noteId: note.id,
+    bytes: Buffer.byteLength(markdown, 'utf8')
+  };
+}
+
 function moveNote(noteId: string, targetFolder: string) {
   const dataDir = ensureLibrary();
   const folder = sanitizeFolderName(targetFolder);
@@ -872,6 +914,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle('capture:save-env-local', (event, payload: SaveEnvPayload) => {
     return saveEnvLocal(event, payload);
+  });
+
+  ipcMain.handle('note:copy-markdown', (event, payload: CopyMarkdownPayload) => {
+    assertTrustedSender(event);
+    return copyMarkdown(payload);
   });
 
   createWindow();

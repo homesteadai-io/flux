@@ -432,13 +432,16 @@ function DetailCard({
 function NotePane({
   selectedNote,
   folders,
-  onMoveNote
+  onMoveNote,
+  onCopyMarkdown
 }: {
   selectedNote: FluxNoteSummary | null;
   folders: FluxFolder[];
   onMoveNote: (targetFolder: string) => void;
+  onCopyMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
   const title = selectedNote?.title ?? 'Record your first FLUX note';
   const analysis = selectedNote?.analysis;
   const transcript =
@@ -449,6 +452,20 @@ function NotePane({
     : selectedNote
       ? ['No explicit next steps captured.']
       : ['Record audio into a local file', 'OpenAI transcription writes markdown'];
+
+  useEffect(() => {
+    setCopyStatus('idle');
+  }, [selectedNote?.id, selectedNote?.folder]);
+
+  const copyMarkdown = async () => {
+    if (!selectedNote || copyStatus === 'copying') {
+      return;
+    }
+
+    setCopyStatus('copying');
+    const copied = await onCopyMarkdown(selectedNote);
+    setCopyStatus(copied ? 'copied' : 'idle');
+  };
 
   return (
     <section className="glass-pane note-pane" aria-label="Flux note detail">
@@ -543,9 +560,13 @@ function NotePane({
 
       <footer className="export-row">
         <strong>Export</strong>
-        <button type="button" disabled>
+        <button
+          type="button"
+          onClick={copyMarkdown}
+          disabled={!selectedNote || copyStatus === 'copying'}
+        >
           <IconCopy />
-          Copy as .md
+          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy as .md'}
         </button>
         <div className="drag-handle" aria-disabled="true">
           <IconDrag />
@@ -747,6 +768,19 @@ function App() {
     }
   }, []);
 
+  const copyMarkdown = useCallback(async (note: FluxNoteSummary) => {
+    try {
+      setErrorMessage(null);
+      setEnvStatusMessage(null);
+      await window.fluxLibrary.copyMarkdown({ noteId: note.id, folder: note.folder });
+      return true;
+    } catch (error) {
+      setCaptureStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not copy markdown.');
+      return false;
+    }
+  }, []);
+
   const createFolder = useCallback(async (name: string) => {
     try {
       setErrorMessage(null);
@@ -802,6 +836,7 @@ function App() {
         selectedNote={selectedNote}
         folders={library?.folders ?? []}
         onMoveNote={moveSelectedNote}
+        onCopyMarkdown={copyMarkdown}
       />
     </main>
   );
