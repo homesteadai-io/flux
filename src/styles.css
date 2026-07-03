@@ -425,6 +425,23 @@ svg path {
 
 .note-pane {
   padding-bottom: 18px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.note-pane::-webkit-scrollbar {
+  width: 10px;
+}
+
+.note-pane::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.note-pane::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.22);
+  background-clip: content-box;
 }
 
 .folder-pill {
