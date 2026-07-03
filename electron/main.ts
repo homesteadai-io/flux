@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent, screen, session } from 'electron';
 import OpenAI, { toFile } from 'openai';
+import { fetchTranscript, type TranscriptResponse } from 'youtube-transcript';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -44,6 +45,7 @@ type FluxNoteSummary = {
   source: 'voice' | 'youtube';
   created: string;
   folder: string;
+  url?: string;
   analysis?: FluxAnalysis;
   transcriptPreview: string;
 };
@@ -60,6 +62,10 @@ type FluxLibrarySnapshot = {
 type SaveRecordingPayload = {
   audioData: unknown;
   mimeType: unknown;
+};
+
+type SaveYouTubePayload = {
+  url: unknown;
 };
 
 type AIProvider = {
@@ -183,6 +189,10 @@ function slugify(input: string) {
   return slug || 'voice-note';
 }
 
+function escapeFrontmatterValue(value: string) {
+  return value.replace(/"/g, '\\"');
+}
+
 function getMarkdownFiles(folderPath: string) {
   return readdirSync(folderPath)
     .filter((name) => name.toLowerCase().endsWith('.md'))
@@ -207,7 +217,11 @@ function parseFrontmatter(markdown: string) {
     }
 
     const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim().replace(/^['"]|['"]$/g, '');
+    const value = line
+      .slice(separator + 1)
+      .trim()
+      .replace(/^['"]|['"]$/g, '')
+      .replace(/\\"/g, '"');
     data[key] = value;
   }
   return data;
@@ -284,6 +298,7 @@ function listNoteRecords(dataDir = ensureLibrary()): FluxNoteRecord[] {
         source: meta.source === 'youtube' ? 'youtube' : 'voice',
         created: meta.created || statSync(notePath).mtime.toISOString(),
         folder,
+        url: meta.url,
         analysis: extractAnalysis(markdown, meta),
         transcriptPreview: extractTranscript(markdown),
         path: notePath
@@ -315,6 +330,69 @@ function listLibrary(): FluxLibrarySnapshot {
 
 function formatDateSlug(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function normalizeYouTubeUrl(value: unknown) {
+  const input = String(value || '').trim();
+  if (!input) {
+    throw new Error('Paste a YouTube URL first.');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    throw new Error(`That is not a valid YouTube URL: ${input}`);
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const isYouTubeHost =
+    host === 'youtube.com' ||
+    host === 'm.youtube.com' ||
+    host === 'music.youtube.com' ||
+    host === 'youtu.be';
+
+  if (!isYouTubeHost) {
+    throw new Error(`That is not a YouTube URL: ${input}`);
+  }
+
+  return parsed.toString();
+}
+
+function formatTimestamp(seconds: number) {
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const totalSeconds = Math.floor(safeSeconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds
+      .toString()
+      .padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+function transcriptOffsetSeconds(segment: TranscriptResponse) {
+  return segment.offset > 1000 ? segment.offset / 1000 : segment.offset;
+}
+
+function formatTranscriptSegments(segments: TranscriptResponse[]) {
+  return segments
+    .map((segment) => `[${formatTimestamp(transcriptOffsetSeconds(segment))}] ${segment.text.trim()}`)
+    .filter((line) => line.replace(/^\[[^\]]+\]\s*/, '').trim())
+    .join('\n');
+}
+
+function plainTranscriptText(segments: TranscriptResponse[]) {
+  return segments
+    .map((segment) => segment.text.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function buildTitle(transcript: string) {
@@ -463,6 +541,7 @@ function audioExtension(mimeType: string) {
 function createMarkdownNote(note: FluxNoteSummary, transcript: string) {
   const analysis = note.analysis;
   const analysisModel = analysis ? `analysis_model: ${analysis.model}\n` : '';
+  const urlLine = note.url ? `url: "${escapeFrontmatterValue(note.url)}"\n` : '';
   const analysisSection = analysis
     ? `## AI Analysis
 ${analysis.topline.trim()}
@@ -474,15 +553,51 @@ ${analysis.nextSteps.length ? analysis.nextSteps.map((step) => `- [ ] ${step}`).
     : '';
 
   return `---
-title: "${note.title.replace(/"/g, '\\"')}"
-source: voice
+title: "${escapeFrontmatterValue(note.title)}"
+source: ${note.source}
 created: ${note.created}
 folder: ${note.folder}
+${urlLine}
 ${analysisModel}---
 # ${note.title}
 ${analysisSection}## Transcript
 ${transcript.trim()}
 `;
+}
+
+async function writeAnalyzedNote({
+  source,
+  transcriptForAnalysis,
+  transcriptForMarkdown,
+  url
+}: {
+  source: 'voice' | 'youtube';
+  transcriptForAnalysis: string;
+  transcriptForMarkdown: string;
+  url?: string;
+}) {
+  const dataDir = ensureLibrary();
+  const created = new Date();
+  const provider = createOpenAIProvider();
+  const breakdown = await provider.analyzeTranscript(transcriptForAnalysis);
+  const { title, ...analysis } = breakdown;
+  const { noteId, notePath } = uniqueMarkdownPath(
+    path.join(dataDir, 'Inbox'),
+    `${formatDateSlug(created)}-${slugify(title)}`
+  );
+  const note: FluxNoteSummary = {
+    id: noteId,
+    title,
+    source,
+    created: created.toISOString(),
+    folder: 'Inbox',
+    url,
+    analysis,
+    transcriptPreview: transcriptForMarkdown.replace(/\s+/g, ' ').slice(0, 180)
+  };
+  writeFileSync(notePath, createMarkdownNote(note, transcriptForMarkdown));
+
+  return { note, library: listLibrary() };
 }
 
 function uniqueMarkdownPath(folderPath: string, baseNoteId: string) {
@@ -551,24 +666,40 @@ async function saveRecording(payload: SaveRecordingPayload) {
 
   const provider = createOpenAIProvider();
   const transcript = await provider.transcribeAudio(audioPath, mimeType);
-  const breakdown = await provider.analyzeTranscript(transcript);
-  const { title, ...analysis } = breakdown;
-  const { noteId, notePath } = uniqueMarkdownPath(
-    path.join(dataDir, 'Inbox'),
-    `${formatDateSlug(created)}-${slugify(title)}`
-  );
-  const note: FluxNoteSummary = {
-    id: noteId,
-    title,
+  return writeAnalyzedNote({
     source: 'voice',
-    created: created.toISOString(),
-    folder: 'Inbox',
-    analysis,
-    transcriptPreview: transcript.replace(/\s+/g, ' ').slice(0, 180)
-  };
-  writeFileSync(notePath, createMarkdownNote(note, transcript));
+    transcriptForAnalysis: transcript,
+    transcriptForMarkdown: transcript
+  });
+}
 
-  return { note, library: listLibrary() };
+async function saveYouTubeUrl(payload: SaveYouTubePayload) {
+  const url = normalizeYouTubeUrl(payload.url);
+  let segments: TranscriptResponse[];
+
+  try {
+    segments = await fetchTranscript(url);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Could not fetch captions.';
+    throw new Error(`Could not fetch YouTube captions for ${url}. ${detail}`);
+  }
+
+  if (segments.length === 0) {
+    throw new Error(`Could not fetch YouTube captions for ${url}. No captions were returned.`);
+  }
+
+  const plainTranscript = plainTranscriptText(segments);
+  const timestampedTranscript = formatTranscriptSegments(segments);
+  if (!plainTranscript || !timestampedTranscript) {
+    throw new Error(`Could not fetch YouTube captions for ${url}. Captions were empty.`);
+  }
+
+  return writeAnalyzedNote({
+    source: 'youtube',
+    transcriptForAnalysis: plainTranscript,
+    transcriptForMarkdown: timestampedTranscript,
+    url
+  });
 }
 
 function moveNote(noteId: string, targetFolder: string) {
@@ -707,6 +838,11 @@ app.whenReady().then(() => {
   ipcMain.handle('capture:save-recording', (event, payload: SaveRecordingPayload) => {
     assertTrustedSender(event);
     return saveRecording(payload);
+  });
+
+  ipcMain.handle('capture:save-youtube-url', (event, payload: SaveYouTubePayload) => {
+    assertTrustedSender(event);
+    return saveYouTubeUrl(payload);
   });
 
   createWindow();

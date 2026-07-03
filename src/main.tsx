@@ -9,7 +9,7 @@ type IconProps = {
 };
 
 type TokenStyle = React.CSSProperties & Record<`--${string}`, string>;
-type CaptureStatus = 'idle' | 'recording' | 'saving' | 'error';
+type CaptureStatus = 'idle' | 'recording' | 'saving' | 'importing' | 'error';
 
 const tokenStyle: TokenStyle = {
   '--glass-pane': tokens.glass.paneFill,
@@ -183,6 +183,9 @@ function statusCopy(status: CaptureStatus) {
   if (status === 'saving') {
     return 'Transcribing...';
   }
+  if (status === 'importing') {
+    return 'Importing...';
+  }
   if (status === 'error') {
     return 'Needs attention';
   }
@@ -218,7 +221,8 @@ function CapturePane({
   errorMessage,
   onSelectFolder,
   onCreateFolder,
-  onToggleRecording
+  onToggleRecording,
+  onSubmitYouTube
 }: {
   library: FluxLibrarySnapshot | null;
   selectedFolder: string;
@@ -229,9 +233,11 @@ function CapturePane({
   onSelectFolder: (folder: string) => void;
   onCreateFolder: (name: string) => void;
   onToggleRecording: () => void;
+  onSubmitYouTube: (url: string) => void;
 }) {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
+  const [youtubeUrl, setYoutubeUrl] = useState('');
   const folders = library?.folders ?? [{ name: 'Inbox', count: 0 }];
   const preview =
     errorMessage ??
@@ -247,6 +253,16 @@ function CapturePane({
     onCreateFolder(nextName);
     setFolderName('');
     setIsCreatingFolder(false);
+  };
+
+  const submitYouTube = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const url = youtubeUrl.trim();
+    if (!url || captureStatus === 'recording' || captureStatus === 'saving' || captureStatus === 'importing') {
+      return;
+    }
+    onSubmitYouTube(url);
+    setYoutubeUrl('');
   };
 
   return (
@@ -298,7 +314,7 @@ function CapturePane({
           className={captureStatus === 'recording' ? 'record-button is-recording' : 'record-button'}
           aria-label={captureStatus === 'recording' ? 'Stop recording' : 'Start recording'}
           onClick={onToggleRecording}
-          disabled={captureStatus === 'saving'}
+          disabled={captureStatus === 'saving' || captureStatus === 'importing'}
         >
           <span className="record-halo record-halo-one" />
           <span className="record-halo record-halo-two" />
@@ -330,13 +346,23 @@ function CapturePane({
         </footer>
       </article>
 
-      <div className="url-bar" aria-disabled="true">
+      <form className="url-bar" onSubmit={submitYouTube}>
         <IconLink />
-        <span>Paste YouTube URL</span>
-        <button type="button" aria-label="YouTube URL is held for Phase 4" disabled>
+        <input
+          value={youtubeUrl}
+          onChange={(event) => setYoutubeUrl(event.target.value)}
+          placeholder="Paste YouTube URL"
+          aria-label="YouTube URL"
+          disabled={captureStatus === 'recording' || captureStatus === 'saving' || captureStatus === 'importing'}
+        />
+        <button
+          type="submit"
+          aria-label="Import YouTube transcript"
+          disabled={!youtubeUrl.trim() || captureStatus === 'recording' || captureStatus === 'saving' || captureStatus === 'importing'}
+        >
           <IconChevron />
         </button>
-      </div>
+      </form>
     </section>
   );
 }
@@ -642,6 +668,22 @@ function App() {
     void startRecording();
   }, [captureStatus, startRecording, stopRecording]);
 
+  const submitYouTube = useCallback(async (url: string) => {
+    try {
+      setErrorMessage(null);
+      setCaptureStatus('importing');
+      const result = await window.fluxLibrary.saveYouTubeUrl({ url });
+      setLibrary(result.library);
+      setSelectedFolder(result.note.folder);
+      setSelectedNoteId(result.note.id);
+      setCaptureStatus('idle');
+      setElapsedSeconds(0);
+    } catch (error) {
+      setCaptureStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not import YouTube transcript.');
+    }
+  }, []);
+
   const createFolder = useCallback(async (name: string) => {
     try {
       setErrorMessage(null);
@@ -687,6 +729,7 @@ function App() {
         onSelectFolder={setSelectedFolder}
         onCreateFolder={createFolder}
         onToggleRecording={toggleRecording}
+        onSubmitYouTube={submitYouTube}
       />
       <NotePane
         selectedNote={selectedNote}
