@@ -31,6 +31,18 @@ const tokenStyle: TokenStyle = {
   '--blur-card': tokens.blur.card
 };
 
+const fallbackLibrary: FluxLibrarySnapshot = {
+  folders: [{ name: 'Inbox', count: 0 }],
+  notes: []
+};
+
+function requireFluxLibrary() {
+  if (!window.fluxLibrary) {
+    throw new Error('Flux desktop bridge is not available in browser preview.');
+  }
+  return window.fluxLibrary;
+}
+
 function IconMic({ size = 26 }: IconProps) {
   return (
     <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -605,8 +617,659 @@ function NotePane({
   );
 }
 
+type WorkbenchFace = 'front' | 'back';
+
+type WorkbenchProps = {
+  face: WorkbenchFace;
+  setFace: (face: WorkbenchFace) => void;
+  captureNote: FluxNoteSummary | null;
+  youtubeNote: FluxNoteSummary | null;
+  captureStatus: CaptureStatus;
+  elapsedSeconds: number;
+  errorMessage: string | null;
+  envStatusMessage: string | null;
+  onToggleRecording: () => void;
+  onSubmitYouTube: (url: string) => void;
+  onCopyMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
+  onExportMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
+};
+
+function GlassButton({
+  children,
+  onClick,
+  disabled,
+  className = ''
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`glass-button ${className}`.trim()}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  );
+}
+
+function WorkbenchHeader() {
+  return (
+    <header className="workbench-header">
+      <div className="brand compact-brand">
+        <IconSpark />
+        <span>FLUX</span>
+      </div>
+      <WindowControls />
+    </header>
+  );
+}
+
+function CaptureCard({
+  captureNote,
+  captureStatus,
+  elapsedSeconds,
+  errorMessage,
+  envStatusMessage,
+  onToggleRecording,
+  onCopyMarkdown,
+  onExportMarkdown
+}: Pick<
+  WorkbenchProps,
+  | 'captureNote'
+  | 'captureStatus'
+  | 'elapsedSeconds'
+  | 'errorMessage'
+  | 'envStatusMessage'
+  | 'onToggleRecording'
+  | 'onCopyMarkdown'
+  | 'onExportMarkdown'
+>) {
+  const [scratchValue, setScratchValue] = useState('');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const [clearedCaptureKey, setClearedCaptureKey] = useState('');
+  const captureKey = captureNote ? `${captureNote.folder}/${captureNote.id}` : '';
+  const activeCaptureNote = clearedCaptureKey === captureKey ? null : captureNote;
+  const isBusy =
+    captureStatus === 'recording' ||
+    captureStatus === 'saving' ||
+    captureStatus === 'importing' ||
+    captureStatus === 'savingEnv';
+  const preview =
+    errorMessage ??
+    envStatusMessage ??
+    activeCaptureNote?.transcript ??
+    'Capture a thought, paste raw text, or drop a key here before sending it somewhere useful.';
+  const captureText = scratchValue.trim() || activeCaptureNote?.transcript?.trim() || '';
+  const captureTitle = activeCaptureNote?.title || 'Flux capture';
+  const captureMarkdown = `# ${captureTitle}\n\n## Capture\n${captureText}\n`;
+
+  useEffect(() => {
+    setCopyStatus('idle');
+    setExportStatus('idle');
+    setClearedCaptureKey('');
+  }, [captureNote?.id, captureNote?.folder]);
+
+  const copyMarkdown = async () => {
+    if (!captureText || copyStatus === 'copying') {
+      return;
+    }
+    setCopyStatus('copying');
+    try {
+      await requireFluxLibrary().copyTextMarkdown({
+        title: captureTitle,
+        markdown: captureMarkdown
+      });
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('idle');
+    }
+  };
+
+  const exportMarkdown = async () => {
+    if (!captureText || exportStatus === 'exporting') {
+      return;
+    }
+    setExportStatus('exporting');
+    try {
+      await requireFluxLibrary().exportTextMarkdown({
+        title: captureTitle,
+        markdown: captureMarkdown
+      });
+      setExportStatus('exported');
+    } catch {
+      setExportStatus('idle');
+    }
+  };
+
+  const clearCapture = () => {
+    setScratchValue('');
+    if (captureKey) {
+      setClearedCaptureKey(captureKey);
+    }
+    setCopyStatus('idle');
+    setExportStatus('idle');
+  };
+
+  return (
+    <section className="glass-pane workbench-card capture-card" aria-label="Flux capture">
+      <WorkbenchHeader />
+      <div className="card-topline">
+        <span />
+        <button
+          type="button"
+          className={captureStatus === 'recording' ? 'mini-mic is-recording' : 'mini-mic'}
+          aria-label={captureStatus === 'recording' ? 'Stop recording' : 'Start recording'}
+          onClick={onToggleRecording}
+          disabled={captureStatus === 'saving' || captureStatus === 'importing' || captureStatus === 'savingEnv'}
+        >
+          {captureStatus === 'recording' ? <IconStop /> : <IconMic />}
+        </button>
+      </div>
+
+      <label className="large-capture-box">
+        <span>Capture</span>
+        <textarea
+          value={scratchValue}
+          onChange={(event) => setScratchValue(event.target.value)}
+          placeholder={preview}
+          rows={8}
+          disabled={isBusy && captureStatus !== 'recording'}
+        />
+      </label>
+
+      <div className="capture-status-row">
+        <span className={captureStatus === 'error' ? 'live-dot is-error' : 'live-dot'} />
+        <span>{statusCopy(captureStatus)}</span>
+        <time>{formatClock(elapsedSeconds)}</time>
+      </div>
+
+      <div className="card-actions">
+        <GlassButton onClick={copyMarkdown} disabled={!captureText || copyStatus === 'copying'}>
+          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
+        </GlassButton>
+        <GlassButton onClick={exportMarkdown} disabled={!captureText || exportStatus === 'exporting'}>
+          {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export notes'}
+        </GlassButton>
+        <GlassButton onClick={clearCapture} disabled={!scratchValue.trim() && !activeCaptureNote}>
+          Clear
+        </GlassButton>
+      </div>
+    </section>
+  );
+}
+
+function YouTubeCard({
+  youtubeNote,
+  captureStatus,
+  onSubmitYouTube,
+  onCopyMarkdown,
+  onExportMarkdown
+}: Pick<
+  WorkbenchProps,
+  'youtubeNote' | 'captureStatus' | 'onSubmitYouTube' | 'onCopyMarkdown' | 'onExportMarkdown'
+>) {
+  const [url, setUrl] = useState('');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const [clearedTranscriptKey, setClearedTranscriptKey] = useState('');
+  const transcriptKey = youtubeNote ? `${youtubeNote.folder}/${youtubeNote.id}` : '';
+  const activeYoutubeNote = clearedTranscriptKey === transcriptKey ? null : youtubeNote;
+  const isBusy = captureStatus === 'importing' || captureStatus === 'saving' || captureStatus === 'recording';
+  const transcript = activeYoutubeNote?.transcript || activeYoutubeNote?.transcriptPreview || '';
+  const youtubeMarkdown = `# YouTube transcript\n\n## Transcript\n${transcript.trim()}\n`;
+
+  useEffect(() => {
+    setCopyStatus('idle');
+    setExportStatus('idle');
+    setClearedTranscriptKey('');
+  }, [youtubeNote?.id, youtubeNote?.folder]);
+
+  const submitUrl = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextUrl = url.trim();
+    if (!nextUrl || isBusy) {
+      return;
+    }
+    onSubmitYouTube(nextUrl);
+    setUrl('');
+  };
+
+  const copyMarkdown = async () => {
+    if (!transcript.trim() || copyStatus === 'copying') {
+      return;
+    }
+    setCopyStatus('copying');
+    try {
+      await requireFluxLibrary().copyTextMarkdown({
+        title: activeYoutubeNote?.title || 'YouTube transcript',
+        markdown: youtubeMarkdown
+      });
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('idle');
+    }
+  };
+
+  const exportMarkdown = async () => {
+    if (!activeYoutubeNote || exportStatus === 'exporting') {
+      return;
+    }
+    setExportStatus('exporting');
+    try {
+      const exported = await onExportMarkdown(activeYoutubeNote);
+      setExportStatus(exported ? 'exported' : 'idle');
+    } catch {
+      setExportStatus('idle');
+    }
+  };
+
+  const clearTranscript = () => {
+    setUrl('');
+    if (transcriptKey) {
+      setClearedTranscriptKey(transcriptKey);
+    }
+    setCopyStatus('idle');
+    setExportStatus('idle');
+  };
+
+  return (
+    <section className="glass-pane workbench-card youtube-card" aria-label="YouTube analysis">
+      <WorkbenchHeader />
+      <div className="analysis-box transcript-box">
+        <span>Transcript: YouTube</span>
+        <pre>{transcript || 'Paste a YouTube URL and Flux will pull every captioned word into this box.'}</pre>
+      </div>
+
+      <form className="inline-paste-box" onSubmit={submitUrl}>
+        <IconLink />
+        <textarea
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="Paste URL: YouTube"
+          aria-label="Paste YouTube URL"
+          rows={2}
+          disabled={isBusy}
+        />
+        <button
+          type="submit"
+          className="generate-button"
+          disabled={!url.trim() || isBusy}
+          aria-label="Generate YouTube transcript"
+        >
+          Generate
+        </button>
+      </form>
+
+      <div className="card-actions">
+        <GlassButton onClick={copyMarkdown} disabled={!transcript.trim() || copyStatus === 'copying'}>
+          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
+        </GlassButton>
+        <GlassButton onClick={exportMarkdown} disabled={!activeYoutubeNote || exportStatus === 'exporting'}>
+          {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export to folder'}
+        </GlassButton>
+        <GlassButton onClick={clearTranscript} disabled={!url.trim() && !activeYoutubeNote}>
+          Clear
+        </GlassButton>
+      </div>
+    </section>
+  );
+}
+
+function ScreenshotTrayCard() {
+  const [screenshots, setScreenshots] = useState<FluxScreenshot[]>([]);
+  const [selectedPath, setSelectedPath] = useState('');
+  const [status, setStatus] = useState<'idle' | 'capturing' | 'copying' | 'copied' | 'saving' | 'saved'>('idle');
+  const selectedScreenshot =
+    screenshots.find((screenshot) => screenshot.filePath === selectedPath) ?? screenshots[0] ?? null;
+
+  useEffect(() => {
+    if (!window.fluxLibrary?.listScreenshots) {
+      return;
+    }
+
+    void window.fluxLibrary
+      .listScreenshots()
+      .then((nextScreenshots) => {
+        setScreenshots(nextScreenshots);
+        setSelectedPath((current) => current || nextScreenshots[0]?.filePath || '');
+      })
+      .catch(() => {
+        setScreenshots([]);
+      });
+  }, []);
+
+  const capture = async () => {
+    if (status === 'capturing') {
+      return;
+    }
+
+    setStatus('capturing');
+    try {
+      const result = await requireFluxLibrary().captureScreenshot();
+      setScreenshots(result.screenshots);
+      setSelectedPath(result.screenshot.filePath);
+      setStatus('idle');
+    } catch {
+      setStatus('idle');
+    }
+  };
+
+  const copyImage = async () => {
+    if (!selectedScreenshot || status === 'copying') {
+      return;
+    }
+
+    setStatus('copying');
+    try {
+      await requireFluxLibrary().copyScreenshot({ filePath: selectedScreenshot.filePath });
+      setStatus('copied');
+    } catch {
+      setStatus('idle');
+    }
+  };
+
+  const saveImage = async () => {
+    if (!selectedScreenshot || status === 'saving') {
+      return;
+    }
+
+    setStatus('saving');
+    try {
+      const result = await requireFluxLibrary().saveScreenshot({ filePath: selectedScreenshot.filePath });
+      setStatus(result.canceled ? 'idle' : 'saved');
+    } catch {
+      setStatus('idle');
+    }
+  };
+
+  const deleteImage = async () => {
+    if (!selectedScreenshot) {
+      return;
+    }
+
+    try {
+      const nextScreenshots = await requireFluxLibrary().deleteScreenshot({
+        filePath: selectedScreenshot.filePath
+      });
+      setScreenshots(nextScreenshots);
+      setSelectedPath(nextScreenshots[0]?.filePath || '');
+      setStatus('idle');
+    } catch {
+      setStatus('idle');
+    }
+  };
+
+  const openFolder = async () => {
+    try {
+      await requireFluxLibrary().openScreenshotsFolder();
+    } catch {
+      // Desktop bridge only.
+    }
+  };
+
+  return (
+    <section className="glass-pane workbench-card screenshot-card" aria-label="Screenshot tray">
+      <WorkbenchHeader />
+      <div className="card-topline">
+        <span className="tray-status">{selectedScreenshot ? selectedScreenshot.fileName : 'No screenshot selected'}</span>
+        <button
+          type="button"
+          className="mini-mic screen-capture-button"
+          aria-label="Capture screenshot"
+          onClick={capture}
+          disabled={status === 'capturing'}
+        >
+          <IconFile />
+        </button>
+      </div>
+
+      <div className="screenshot-tray">
+        <span>Screenshot tray</span>
+        <div className="thumbnail-grid">
+          {screenshots.length ? (
+            screenshots.map((screenshot) => (
+              <button
+                key={screenshot.filePath}
+                type="button"
+                className={selectedScreenshot?.filePath === screenshot.filePath ? 'is-selected' : ''}
+                onClick={() => setSelectedPath(screenshot.filePath)}
+                title={screenshot.fileName}
+              >
+                <img src={screenshot.dataUrl} alt={screenshot.fileName} />
+              </button>
+            ))
+          ) : (
+            <p>{status === 'capturing' ? 'Capturing...' : 'No screenshots yet.'}</p>
+          )}
+        </div>
+      </div>
+
+      <div className="card-actions">
+        <GlassButton onClick={copyImage} disabled={!selectedScreenshot || status === 'copying'}>
+          {status === 'copying' ? 'Copying...' : status === 'copied' ? 'Copied' : 'Copy image'}
+        </GlassButton>
+        <GlassButton onClick={saveImage} disabled={!selectedScreenshot || status === 'saving'}>
+          {status === 'saving' ? 'Saving...' : status === 'saved' ? 'Saved' : 'Save image'}
+        </GlassButton>
+        <GlassButton onClick={openFolder}>Open folder</GlassButton>
+        <GlassButton onClick={deleteImage} disabled={!selectedScreenshot}>
+          Delete
+        </GlassButton>
+      </div>
+    </section>
+  );
+}
+
+function ListCard() {
+  const [title, setTitle] = useState('Working list');
+  const [draftItem, setDraftItem] = useState('');
+  const [items, setItems] = useState<string[]>(['Review Flux layout', 'Keep transcript in YouTube box']);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const hasListContent = Boolean(title.trim() || items.length);
+
+  useEffect(() => {
+    setCopyStatus('idle');
+    setExportStatus('idle');
+  }, [title, items.length]);
+
+  const listMarkdown = () => {
+    const safeTitle = title.trim() || 'Flux list';
+    const body = items.length ? items.map((item) => `- [ ] ${item}`).join('\n') : '- [ ] ';
+    return `# ${safeTitle}\n\n${body}\n`;
+  };
+
+  const addItem = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextItem = draftItem.trim();
+    if (!nextItem) {
+      return;
+    }
+    setItems((current) => [...current, nextItem]);
+    setSelectedIndex(items.length);
+    setDraftItem('');
+  };
+
+  const removeSelectedItem = () => {
+    if (selectedIndex === null) {
+      return;
+    }
+    setItems((current) => current.filter((_, index) => index !== selectedIndex));
+    setSelectedIndex(null);
+  };
+
+  const copyMarkdown = async () => {
+    if (!hasListContent || copyStatus === 'copying') {
+      return;
+    }
+    setCopyStatus('copying');
+    try {
+      await requireFluxLibrary().copyListMarkdown({
+        title: title.trim() || 'Flux list',
+        markdown: listMarkdown()
+      });
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('idle');
+    }
+  };
+
+  const exportMarkdown = async () => {
+    if (!hasListContent || exportStatus === 'exporting') {
+      return;
+    }
+    setExportStatus('exporting');
+    try {
+      await requireFluxLibrary().exportListMarkdown({
+        title: title.trim() || 'Flux list',
+        markdown: listMarkdown()
+      });
+      setExportStatus('exported');
+    } catch {
+      setExportStatus('idle');
+    }
+  };
+
+  const clearList = () => {
+    setTitle('');
+    setDraftItem('');
+    setItems([]);
+    setSelectedIndex(null);
+    setCopyStatus('idle');
+    setExportStatus('idle');
+  };
+
+  return (
+    <section className="glass-pane workbench-card list-card" aria-label="Flux list">
+      <WorkbenchHeader />
+      <div className="list-box">
+        <input
+          className="list-title-input"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="List title"
+          aria-label="List title"
+        />
+        <form className="list-add-row" onSubmit={addItem}>
+          <input
+            value={draftItem}
+            onChange={(event) => setDraftItem(event.target.value)}
+            placeholder="Add item"
+            aria-label="Add list item"
+          />
+          <button type="submit" disabled={!draftItem.trim()}>
+            <IconPlus />
+          </button>
+        </form>
+        <div
+          className="note-list"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === 'Delete' || event.key === 'Backspace') {
+              event.preventDefault();
+              removeSelectedItem();
+            }
+          }}
+        >
+          {items.length ? (
+            items.map((item, index) => (
+              <button
+                key={`${item}-${index}`}
+                type="button"
+                className={selectedIndex === index ? 'is-selected' : ''}
+                onClick={() => setSelectedIndex(index)}
+              >
+                <i />
+                <span>{item}</span>
+              </button>
+            ))
+          ) : (
+            <p>No list items.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="card-actions">
+        <GlassButton onClick={copyMarkdown} disabled={!hasListContent || copyStatus === 'copying'}>
+          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
+        </GlassButton>
+        <GlassButton onClick={exportMarkdown} disabled={!hasListContent || exportStatus === 'exporting'}>
+          {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export to folder'}
+        </GlassButton>
+        <GlassButton onClick={clearList} disabled={!hasListContent && !draftItem.trim()}>
+          Clear
+        </GlassButton>
+      </div>
+    </section>
+  );
+}
+
+function WorkbenchDock({ face, setFace }: { face: WorkbenchFace; setFace: (face: WorkbenchFace) => void }) {
+  return (
+    <nav className="face-dock" aria-label="Flux pages">
+      <button
+        type="button"
+        className={face === 'front' ? 'is-active' : ''}
+        onClick={() => setFace('front')}
+        aria-label="Capture and YouTube"
+      >
+        <IconMic size={18} />
+      </button>
+      <button
+        type="button"
+        className={face === 'back' ? 'is-active' : ''}
+        onClick={() => setFace('back')}
+        aria-label="Screenshots and list"
+      >
+        <IconFolder size={18} />
+      </button>
+    </nav>
+  );
+}
+
+function CardWorkbench(props: WorkbenchProps) {
+  return (
+    <>
+      <section className={`workbench-face ${props.face === 'front' ? 'is-active' : 'is-hidden'}`}>
+        <CaptureCard
+          captureNote={props.captureNote}
+          captureStatus={props.captureStatus}
+          elapsedSeconds={props.elapsedSeconds}
+          errorMessage={props.errorMessage}
+          envStatusMessage={props.envStatusMessage}
+          onToggleRecording={props.onToggleRecording}
+          onCopyMarkdown={props.onCopyMarkdown}
+          onExportMarkdown={props.onExportMarkdown}
+        />
+        <YouTubeCard
+          youtubeNote={props.youtubeNote}
+          captureStatus={props.captureStatus}
+          onSubmitYouTube={props.onSubmitYouTube}
+          onCopyMarkdown={props.onCopyMarkdown}
+          onExportMarkdown={props.onExportMarkdown}
+        />
+      </section>
+
+      <section className={`workbench-face ${props.face === 'back' ? 'is-active' : 'is-hidden'}`}>
+        <ScreenshotTrayCard />
+        <ListCard />
+      </section>
+
+      <WorkbenchDock face={props.face} setFace={props.setFace} />
+    </>
+  );
+}
+
 function App() {
   const [isIdle, setIsIdle] = useState(false);
+  const [activeFace, setActiveFace] = useState<WorkbenchFace>('front');
   const [library, setLibrary] = useState<FluxLibrarySnapshot | null>(null);
   const [selectedFolder, setSelectedFolder] = useState('Inbox');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -638,7 +1301,22 @@ function App() {
     );
   }, [library, notesInFolder, selectedNoteId]);
 
+  const captureNote = useMemo(
+    () => library?.notes.find((note) => note.source === 'voice') ?? null,
+    [library]
+  );
+
+  const youtubeNote = useMemo(
+    () => library?.notes.find((note) => note.source === 'youtube') ?? null,
+    [library]
+  );
+
   const refreshLibrary = useCallback(async () => {
+    if (!window.fluxLibrary) {
+      setLibrary(fallbackLibrary);
+      return;
+    }
+
     const snapshot = await window.fluxLibrary.list();
     setLibrary(snapshot);
     if (!snapshot.folders.some((folder) => folder.name === selectedFolder)) {
@@ -713,7 +1391,7 @@ function App() {
 
         void blob
           .arrayBuffer()
-          .then((audioData) => window.fluxLibrary.saveRecording({ audioData, mimeType }))
+          .then((audioData) => requireFluxLibrary().saveRecording({ audioData, mimeType }))
           .then((result) => {
             setLibrary(result.library);
             setSelectedFolder(result.note.folder);
@@ -760,7 +1438,7 @@ function App() {
       setErrorMessage(null);
       setEnvStatusMessage(null);
       setCaptureStatus('importing');
-      const result = await window.fluxLibrary.saveYouTubeUrl({ url });
+      const result = await requireFluxLibrary().saveYouTubeUrl({ url });
       setLibrary(result.library);
       setSelectedFolder(result.note.folder);
       setSelectedNoteId(result.note.id);
@@ -777,7 +1455,7 @@ function App() {
       setErrorMessage(null);
       setEnvStatusMessage(null);
       setCaptureStatus('savingEnv');
-      const result = await window.fluxLibrary.saveEnvLocal({ content });
+      const result = await requireFluxLibrary().saveEnvLocal({ content });
       setCaptureStatus('idle');
 
       if (result.canceled) {
@@ -797,7 +1475,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      await window.fluxLibrary.copyMarkdown({ noteId: note.id, folder: note.folder });
+      await requireFluxLibrary().copyMarkdown({ noteId: note.id, folder: note.folder });
       return true;
     } catch (error) {
       setCaptureStatus('error');
@@ -810,7 +1488,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      const result = await window.fluxLibrary.exportMarkdown({
+      const result = await requireFluxLibrary().exportMarkdown({
         noteId: note.id,
         folder: note.folder
       });
@@ -832,7 +1510,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      const result = await window.fluxLibrary.createFolder(name);
+      const result = await requireFluxLibrary().createFolder(name);
       setLibrary(result.library);
       setSelectedFolder(result.folder);
     } catch (error) {
@@ -853,7 +1531,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      const snapshot = await window.fluxLibrary.moveNote(selectedNote.id, targetFolder);
+      const snapshot = await requireFluxLibrary().moveNote(selectedNote.id, targetFolder);
       setLibrary(snapshot);
       setSelectedFolder(targetFolder.trim());
       setSelectedNoteId(selectedNote.id);
@@ -864,25 +1542,18 @@ function App() {
   }, [library, selectedNote]);
 
   return (
-    <main className={isIdle ? 'flux-stage is-idle' : 'flux-stage'} style={tokenStyle}>
-      <CapturePane
-        library={library}
-        selectedFolder={selectedFolder}
-        selectedNote={selectedNote}
+    <main className={isIdle ? 'flux-stage card-workbench is-idle' : 'flux-stage card-workbench'} style={tokenStyle}>
+      <CardWorkbench
+        face={activeFace}
+        setFace={setActiveFace}
+        captureNote={captureNote}
+        youtubeNote={youtubeNote}
         captureStatus={captureStatus}
         elapsedSeconds={elapsedSeconds}
         errorMessage={errorMessage}
         envStatusMessage={envStatusMessage}
-        onSelectFolder={setSelectedFolder}
-        onCreateFolder={createFolder}
         onToggleRecording={toggleRecording}
         onSubmitYouTube={submitYouTube}
-        onSaveEnvLocal={saveEnvLocal}
-      />
-      <NotePane
-        selectedNote={selectedNote}
-        folders={library?.folders ?? []}
-        onMoveNote={moveSelectedNote}
         onCopyMarkdown={copyMarkdown}
         onExportMarkdown={exportMarkdown}
       />

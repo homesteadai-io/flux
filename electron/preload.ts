@@ -17,5 +17,19 @@ contextBridge.exposeInMainWorld('fluxLibrary', {
   copyMarkdown: (payload: { noteId: string; folder: string }) =>
     ipcRenderer.invoke('note:copy-markdown', payload),
   exportMarkdown: (payload: { noteId: string; folder: string }) =>
-    ipcRenderer.invoke('note:export-markdown', payload)
+    ipcRenderer.invoke('note:export-markdown', payload),
+  copyListMarkdown: (payload: { title: string; markdown: string }) =>
+    ipcRenderer.invoke('list:copy-markdown', payload),
+  exportListMarkdown: (payload: { title: string; markdown: string }) =>
+    ipcRenderer.invoke('list:export-markdown', payload),
+  copyTextMarkdown: (payload: { title: string; markdown: string }) =>
+    ipcRenderer.invoke('text:copy-markdown', payload),
+  exportTextMarkdown: (payload: { title: string; markdown: string }) =>
+    ipcRenderer.invoke('text:export-markdown', payload),
+  listScreenshots: () => ipcRenderer.invoke('screenshot:list'),
+  captureScreenshot: () => ipcRenderer.invoke('screenshot:capture'),
+  copyScreenshot: (payload: { filePath: string }) => ipcRenderer.invoke('screenshot:copy', payload),
+  saveScreenshot: (payload: { filePath: string }) => ipcRenderer.invoke('screenshot:save', payload),
+  deleteScreenshot: (payload: { filePath: string }) => ipcRenderer.invoke('screenshot:delete', payload),
+  openScreenshotsFolder: () => ipcRenderer.invoke('screenshot:open-folder')
 });

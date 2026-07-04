@@ -1,10 +1,10 @@
 export const tokens = {
   glass: {
-    paneFill: 'rgba(255, 255, 255, 0.08)',
-    cardFill: 'rgba(255, 255, 255, 0.12)',
-    strongFill: 'rgba(255, 255, 255, 0.16)',
-    border: 'rgba(255, 255, 255, 0.24)',
-    borderStrong: 'rgba(255, 255, 255, 0.42)',
+    paneFill: 'rgba(54, 66, 70, 0.34)',
+    cardFill: 'rgba(52, 65, 70, 0.28)',
+    strongFill: 'rgba(255, 255, 255, 0.2)',
+    border: 'rgba(255, 255, 255, 0.3)',
+    borderStrong: 'rgba(255, 255, 255, 0.5)',
     shadow: 'rgba(0, 0, 0, 0.44)'
   },
   color: {

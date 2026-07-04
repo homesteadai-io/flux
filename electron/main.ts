@@ -2,9 +2,12 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  desktopCapturer,
   dialog,
   ipcMain,
   IpcMainInvokeEvent,
+  Menu,
+  nativeImage,
   screen,
   session,
   shell
@@ -20,6 +23,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
@@ -59,6 +63,7 @@ type FluxNoteSummary = {
   folder: string;
   url?: string;
   analysis?: FluxAnalysis;
+  transcript: string;
   transcriptPreview: string;
 };
 
@@ -93,6 +98,25 @@ type CopyMarkdownPayload = {
   folder: unknown;
 };
 
+type ListMarkdownPayload = {
+  title: unknown;
+  markdown: unknown;
+};
+
+type ScreenshotPayload = {
+  filePath: unknown;
+};
+
+type TextMarkdownPayload = {
+  title: unknown;
+  markdown: unknown;
+  folderName?: unknown;
+};
+
+type ListCopyMarkdownResult = {
+  bytes: number;
+};
+
 type CopyMarkdownResult = {
   noteId: string;
   bytes: number;
@@ -101,6 +125,21 @@ type CopyMarkdownResult = {
 type ExportMarkdownResult =
   | { canceled: true }
   | { canceled: false; filePath: string; directory: string; overwritten: boolean };
+
+type ListMarkdownResult = {
+  filePath: string;
+  directory: string;
+};
+
+type FluxScreenshot = {
+  id: string;
+  filePath: string;
+  fileName: string;
+  created: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+};
 
 type AIProvider = {
   transcribeAudio: (audioPath: string, mimeType: string) => Promise<string>;
@@ -118,6 +157,8 @@ const transcriptEngine = require(path.join(__dirname, '../scripts/transcript.cjs
 };
 const defaultBounds: WindowBounds = { width: 980, height: 660 };
 const defaultDataDir = path.join(os.homedir(), 'Flux');
+const transcriptNotesFolder = 'Transcript Notes';
+const screenshotsFolder = 'Screenshots';
 const defaultMarkdownExportDir = path.join(
   os.homedir(),
   'OneDrive',
@@ -218,7 +259,14 @@ function ensureLibrary() {
   const dataDir = getDataDir();
   mkdirSync(path.join(dataDir, 'Inbox'), { recursive: true });
   mkdirSync(path.join(dataDir, '.flux', 'audio'), { recursive: true });
+  mkdirSync(path.join(dataDir, screenshotsFolder), { recursive: true });
   return dataDir;
+}
+
+function getScreenshotsDir() {
+  const directory = path.join(ensureLibrary(), screenshotsFolder);
+  mkdirSync(directory, { recursive: true });
+  return directory;
 }
 
 function sanitizeFolderName(name: string) {
@@ -294,7 +342,10 @@ function extractSection(markdown: string, heading: string) {
 }
 
 function extractTranscript(markdown: string) {
-  const transcript = extractSection(markdown, 'Transcript');
+  return extractSection(markdown, 'Transcript');
+}
+
+function previewTranscript(transcript: string) {
   return transcript.replace(/\s+/g, ' ').slice(0, 180);
 }
 
@@ -349,7 +400,8 @@ function listNoteRecords(dataDir = ensureLibrary()): FluxNoteRecord[] {
         folder,
         url: meta.url,
         analysis: extractAnalysis(markdown, meta),
-        transcriptPreview: extractTranscript(markdown),
+        transcript: extractTranscript(markdown),
+        transcriptPreview: previewTranscript(extractTranscript(markdown)),
         path: notePath
       });
     }
@@ -627,9 +679,41 @@ async function writeAnalyzedNote({
     folder: 'Inbox',
     url,
     analysis,
+    transcript: transcriptForMarkdown,
     transcriptPreview: transcriptForMarkdown.replace(/\s+/g, ' ').slice(0, 180)
   };
   writeFileSync(notePath, createMarkdownNote(note, transcriptForMarkdown));
+
+  return { note, library: listLibrary() };
+}
+
+async function writeTranscriptNote({
+  transcript,
+  url
+}: {
+  transcript: string;
+  url: string;
+}) {
+  const dataDir = ensureLibrary();
+  const folderPath = path.join(dataDir, transcriptNotesFolder);
+  mkdirSync(folderPath, { recursive: true });
+  const created = new Date();
+  const title = 'YouTube transcript';
+  const { noteId, notePath } = uniqueMarkdownPath(
+    folderPath,
+    `${formatDateSlug(created)}-${slugify(title)}`
+  );
+  const note: FluxNoteSummary = {
+    id: noteId,
+    title,
+    source: 'youtube',
+    created: created.toISOString(),
+    folder: transcriptNotesFolder,
+    url,
+    transcript,
+    transcriptPreview: previewTranscript(transcript)
+  };
+  writeFileSync(notePath, createMarkdownNote(note, transcript));
 
   return { note, library: listLibrary() };
 }
@@ -715,10 +799,8 @@ async function saveYouTubeUrl(payload: SaveYouTubePayload) {
     throw new Error(`Could not fetch YouTube captions for ${url}. ${result.message}`);
   }
 
-  return writeAnalyzedNote({
-    source: 'youtube',
-    transcriptForAnalysis: result.transcript,
-    transcriptForMarkdown: result.transcript,
+  return writeTranscriptNote({
+    transcript: result.transcript,
     url
   });
 }
@@ -760,7 +842,7 @@ async function saveEnvLocal(event: IpcMainInvokeEvent, payload: SaveEnvPayload):
     const overwriteOptions: Electron.MessageBoxOptions = {
       type: 'warning',
       title: 'Overwrite .env.local?',
-      message: '.env.local already exists in this folder.',
+      message: `${path.basename(filePath)} already exists in this folder.`,
       detail: filePath,
       buttons: ['Cancel', 'Overwrite'],
       defaultId: 0,
@@ -776,7 +858,14 @@ async function saveEnvLocal(event: IpcMainInvokeEvent, payload: SaveEnvPayload):
     }
   }
 
-  writeFileSync(filePath, payload.content);
+  const content = payload.content.trimEnd();
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(filePath, `${content}\n`, { encoding: 'utf8', flag: 'w' });
+  const savedContent = readFileSync(filePath, 'utf8');
+  if (!existsSync(filePath) || savedContent.trimEnd() !== content) {
+    throw new Error(`Could not verify saved file ${filePath}.`);
+  }
+  shell.showItemInFolder(filePath);
   return { canceled: false, filePath, directory, overwritten: alreadyExists };
 }
 
@@ -799,10 +888,15 @@ async function exportMarkdown(event: IpcMainInvokeEvent, payload: CopyMarkdownPa
   }
 
   const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-  const directory = defaultMarkdownExportDir;
+  const directory =
+    note.source === 'youtube' ? path.join(getDataDir(), transcriptNotesFolder) : defaultMarkdownExportDir;
   mkdirSync(directory, { recursive: true });
   const fileName = path.basename(note.path);
   const filePath = path.join(directory, fileName);
+  if (path.normalize(note.path) === path.normalize(filePath)) {
+    void shell.openPath(directory);
+    return { canceled: false, filePath, directory, overwritten: false };
+  }
   const alreadyExists = existsSync(filePath);
 
   if (alreadyExists) {
@@ -828,6 +922,189 @@ async function exportMarkdown(event: IpcMainInvokeEvent, payload: CopyMarkdownPa
   copyFileSync(note.path, filePath);
   void shell.openPath(directory);
   return { canceled: false, filePath, directory, overwritten: alreadyExists };
+}
+
+function exportListMarkdown(event: IpcMainInvokeEvent, payload: ListMarkdownPayload): ListMarkdownResult {
+  assertTrustedSender(event);
+  const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : 'Flux list';
+  const markdown = typeof payload.markdown === 'string' ? payload.markdown.trim() : '';
+  if (!markdown) {
+    throw new Error('Write a list before exporting.');
+  }
+
+  const directory = path.join(getDataDir(), 'Lists');
+  mkdirSync(directory, { recursive: true });
+  const { notePath } = uniqueMarkdownPath(directory, `${formatDateSlug(new Date())}-${slugify(title)}`);
+  writeFileSync(notePath, `${markdown}\n`);
+  void shell.openPath(directory);
+  return { filePath: notePath, directory };
+}
+
+function copyListMarkdown(event: IpcMainInvokeEvent, payload: ListMarkdownPayload): ListCopyMarkdownResult {
+  assertTrustedSender(event);
+  const markdown = typeof payload.markdown === 'string' ? payload.markdown.trim() : '';
+  if (!markdown) {
+    throw new Error('Write a list before copying.');
+  }
+
+  clipboard.writeText(`${markdown}\n`);
+  return { bytes: Buffer.byteLength(`${markdown}\n`, 'utf8') };
+}
+
+function copyTextMarkdown(event: IpcMainInvokeEvent, payload: TextMarkdownPayload): ListCopyMarkdownResult {
+  assertTrustedSender(event);
+  const markdown = typeof payload.markdown === 'string' ? payload.markdown.trim() : '';
+  if (!markdown) {
+    throw new Error('Write text before copying.');
+  }
+
+  clipboard.writeText(`${markdown}\n`);
+  return { bytes: Buffer.byteLength(`${markdown}\n`, 'utf8') };
+}
+
+function exportTextMarkdown(event: IpcMainInvokeEvent, payload: TextMarkdownPayload): ListMarkdownResult {
+  assertTrustedSender(event);
+  const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : 'Flux note';
+  const markdown = typeof payload.markdown === 'string' ? payload.markdown.trim() : '';
+  if (!markdown) {
+    throw new Error('Write text before exporting.');
+  }
+
+  const directory = defaultMarkdownExportDir;
+  mkdirSync(directory, { recursive: true });
+  const { notePath } = uniqueMarkdownPath(directory, `${formatDateSlug(new Date())}-${slugify(title)}`);
+  writeFileSync(notePath, `${markdown}\n`, { encoding: 'utf8' });
+  void shell.openPath(directory);
+  return { filePath: notePath, directory };
+}
+
+function screenshotFromFile(filePath: string): FluxScreenshot {
+  const image = nativeImage.createFromPath(filePath);
+  const size = image.getSize();
+  const stats = statSync(filePath);
+  return {
+    id: path.basename(filePath, '.png'),
+    filePath,
+    fileName: path.basename(filePath),
+    created: stats.mtime.toISOString(),
+    dataUrl: image.toDataURL(),
+    width: size.width,
+    height: size.height
+  };
+}
+
+function listScreenshots(): FluxScreenshot[] {
+  const directory = getScreenshotsDir();
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.png'))
+    .map((entry) => path.join(directory, entry.name))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+    .slice(0, 40)
+    .map(screenshotFromFile);
+}
+
+async function captureScreenshot(event: IpcMainInvokeEvent): Promise<{ screenshot: FluxScreenshot; screenshots: FluxScreenshot[] }> {
+  assertTrustedSender(event);
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const display = parentWindow
+    ? screen.getDisplayNearestPoint(parentWindow.getBounds())
+    : screen.getPrimaryDisplay();
+  const thumbnailSize = {
+    width: Math.round(display.size.width * display.scaleFactor),
+    height: Math.round(display.size.height * display.scaleFactor)
+  };
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize
+  });
+  const source =
+    sources.find((candidate) => candidate.display_id === String(display.id)) ??
+    sources[0];
+
+  if (!source || source.thumbnail.isEmpty()) {
+    throw new Error('Could not capture the screen.');
+  }
+
+  const created = new Date();
+  const directory = getScreenshotsDir();
+  const fileName = `${formatDateSlug(created)}-${created.getHours().toString().padStart(2, '0')}${created
+    .getMinutes()
+    .toString()
+    .padStart(2, '0')}${created.getSeconds().toString().padStart(2, '0')}-screenshot.png`;
+  const filePath = path.join(directory, fileName);
+  writeFileSync(filePath, source.thumbnail.toPNG());
+  const screenshot = screenshotFromFile(filePath);
+  return { screenshot, screenshots: listScreenshots() };
+}
+
+function normalizeScreenshotPath(payload: ScreenshotPayload) {
+  if (typeof payload.filePath !== 'string' || !payload.filePath.trim()) {
+    throw new Error('Choose a screenshot first.');
+  }
+
+  const directory = path.normalize(getScreenshotsDir());
+  const filePath = path.normalize(payload.filePath);
+  if (!filePath.startsWith(directory + path.sep) || !existsSync(filePath)) {
+    throw new Error('Screenshot is outside the Flux screenshot folder.');
+  }
+
+  return filePath;
+}
+
+function copyScreenshot(event: IpcMainInvokeEvent, payload: ScreenshotPayload) {
+  assertTrustedSender(event);
+  const filePath = normalizeScreenshotPath(payload);
+  const image = nativeImage.createFromPath(filePath);
+  if (image.isEmpty()) {
+    throw new Error('Could not copy an empty screenshot.');
+  }
+
+  clipboard.writeImage(image);
+  return screenshotFromFile(filePath);
+}
+
+function deleteScreenshot(event: IpcMainInvokeEvent, payload: ScreenshotPayload) {
+  assertTrustedSender(event);
+  const filePath = normalizeScreenshotPath(payload);
+  rmSync(filePath, { force: true });
+  return listScreenshots();
+}
+
+async function saveScreenshot(event: IpcMainInvokeEvent, payload: ScreenshotPayload): Promise<ExportMarkdownResult> {
+  assertTrustedSender(event);
+  const sourcePath = normalizeScreenshotPath(payload);
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const saveOptions: Electron.SaveDialogOptions = {
+    title: 'Save screenshot',
+    defaultPath: path.join(os.homedir(), 'Pictures', path.basename(sourcePath)),
+    filters: [{ name: 'PNG image', extensions: ['png'] }]
+  };
+  const selection = parentWindow
+    ? await dialog.showSaveDialog(parentWindow, saveOptions)
+    : await dialog.showSaveDialog(saveOptions);
+
+  if (selection.canceled || !selection.filePath) {
+    return { canceled: true };
+  }
+
+  const targetPath = selection.filePath.toLowerCase().endsWith('.png')
+    ? selection.filePath
+    : `${selection.filePath}.png`;
+  copyFileSync(sourcePath, targetPath);
+  shell.showItemInFolder(targetPath);
+  return {
+    canceled: false,
+    filePath: targetPath,
+    directory: path.dirname(targetPath),
+    overwritten: false
+  };
+}
+
+function openScreenshotsFolder(event: IpcMainInvokeEvent) {
+  assertTrustedSender(event);
+  const directory = getScreenshotsDir();
+  void shell.openPath(directory);
+  return { directory };
 }
 
 function moveNote(noteId: string, targetFolder: string) {
@@ -910,6 +1187,21 @@ function createWindow() {
     });
   });
 
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const hasText = params.selectionText.trim().length > 0;
+    const template: Electron.MenuItemConstructorOptions[] = [
+      { role: 'undo', enabled: params.editFlags.canUndo },
+      { role: 'redo', enabled: params.editFlags.canRedo },
+      { type: 'separator' },
+      { role: 'cut', enabled: params.editFlags.canCut },
+      { role: 'copy', enabled: hasText || params.editFlags.canCopy },
+      { role: 'paste', enabled: params.isEditable || params.editFlags.canPaste },
+      { role: 'selectAll', enabled: params.editFlags.canSelectAll }
+    ];
+
+    Menu.buildFromTemplate(template).popup({ window: mainWindow });
+  });
+
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
@@ -984,6 +1276,47 @@ app.whenReady().then(() => {
 
   ipcMain.handle('note:export-markdown', (event, payload: CopyMarkdownPayload) => {
     return exportMarkdown(event, payload);
+  });
+
+  ipcMain.handle('list:export-markdown', (event, payload: ListMarkdownPayload) => {
+    return exportListMarkdown(event, payload);
+  });
+
+  ipcMain.handle('list:copy-markdown', (event, payload: ListMarkdownPayload) => {
+    return copyListMarkdown(event, payload);
+  });
+
+  ipcMain.handle('text:copy-markdown', (event, payload: TextMarkdownPayload) => {
+    return copyTextMarkdown(event, payload);
+  });
+
+  ipcMain.handle('text:export-markdown', (event, payload: TextMarkdownPayload) => {
+    return exportTextMarkdown(event, payload);
+  });
+
+  ipcMain.handle('screenshot:list', (event) => {
+    assertTrustedSender(event);
+    return listScreenshots();
+  });
+
+  ipcMain.handle('screenshot:capture', (event) => {
+    return captureScreenshot(event);
+  });
+
+  ipcMain.handle('screenshot:copy', (event, payload: ScreenshotPayload) => {
+    return copyScreenshot(event, payload);
+  });
+
+  ipcMain.handle('screenshot:save', (event, payload: ScreenshotPayload) => {
+    return saveScreenshot(event, payload);
+  });
+
+  ipcMain.handle('screenshot:delete', (event, payload: ScreenshotPayload) => {
+    return deleteScreenshot(event, payload);
+  });
+
+  ipcMain.handle('screenshot:open-folder', (event) => {
+    return openScreenshotsFolder(event);
   });
 
   createWindow();

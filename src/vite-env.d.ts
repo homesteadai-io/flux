@@ -24,6 +24,7 @@ interface FluxNoteSummary {
   folder: string;
   url?: string;
   analysis?: FluxAnalysis;
+  transcript: string;
   transcriptPreview: string;
 }
 
@@ -50,6 +51,25 @@ type FluxExportMarkdownResult =
   | { canceled: true }
   | { canceled: false; filePath: string; directory: string; overwritten: boolean };
 
+interface FluxListMarkdownResult {
+  filePath: string;
+  directory: string;
+}
+
+interface FluxListCopyMarkdownResult {
+  bytes: number;
+}
+
+interface FluxScreenshot {
+  id: string;
+  filePath: string;
+  fileName: string;
+  created: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
 interface FluxLibraryApi {
   list: () => Promise<FluxLibrarySnapshot>;
   createFolder: (name: string) => Promise<{ folder: string; library: FluxLibrarySnapshot }>;
@@ -59,6 +79,16 @@ interface FluxLibraryApi {
   saveEnvLocal: (payload: { content: string }) => Promise<FluxSaveEnvResult>;
   copyMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxCopyMarkdownResult>;
   exportMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxExportMarkdownResult>;
+  copyListMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListCopyMarkdownResult>;
+  exportListMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListMarkdownResult>;
+  copyTextMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListCopyMarkdownResult>;
+  exportTextMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListMarkdownResult>;
+  listScreenshots: () => Promise<FluxScreenshot[]>;
+  captureScreenshot: () => Promise<{ screenshot: FluxScreenshot; screenshots: FluxScreenshot[] }>;
+  copyScreenshot: (payload: { filePath: string }) => Promise<FluxScreenshot>;
+  saveScreenshot: (payload: { filePath: string }) => Promise<FluxExportMarkdownResult>;
+  deleteScreenshot: (payload: { filePath: string }) => Promise<FluxScreenshot[]>;
+  openScreenshotsFolder: () => Promise<{ directory: string }>;
 }
 
 interface Window {
