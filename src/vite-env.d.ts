@@ -81,10 +81,13 @@ interface FluxLibraryApi {
   exportMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxExportMarkdownResult>;
   copyListMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListCopyMarkdownResult>;
   exportListMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListMarkdownResult>;
+  copyTextMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListCopyMarkdownResult>;
+  exportTextMarkdown: (payload: { title: string; markdown: string }) => Promise<FluxListMarkdownResult>;
   listScreenshots: () => Promise<FluxScreenshot[]>;
   captureScreenshot: () => Promise<{ screenshot: FluxScreenshot; screenshots: FluxScreenshot[] }>;
   copyScreenshot: (payload: { filePath: string }) => Promise<FluxScreenshot>;
   saveScreenshot: (payload: { filePath: string }) => Promise<FluxExportMarkdownResult>;
+  deleteScreenshot: (payload: { filePath: string }) => Promise<FluxScreenshot[]>;
   openScreenshotsFolder: () => Promise<{ directory: string }>;
 }
 

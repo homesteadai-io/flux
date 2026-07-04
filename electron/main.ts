@@ -23,6 +23,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
@@ -104,6 +105,12 @@ type ListMarkdownPayload = {
 
 type ScreenshotPayload = {
   filePath: unknown;
+};
+
+type TextMarkdownPayload = {
+  title: unknown;
+  markdown: unknown;
+  folderName?: unknown;
 };
 
 type ListCopyMarkdownResult = {
@@ -944,6 +951,33 @@ function copyListMarkdown(event: IpcMainInvokeEvent, payload: ListMarkdownPayloa
   return { bytes: Buffer.byteLength(`${markdown}\n`, 'utf8') };
 }
 
+function copyTextMarkdown(event: IpcMainInvokeEvent, payload: TextMarkdownPayload): ListCopyMarkdownResult {
+  assertTrustedSender(event);
+  const markdown = typeof payload.markdown === 'string' ? payload.markdown.trim() : '';
+  if (!markdown) {
+    throw new Error('Write text before copying.');
+  }
+
+  clipboard.writeText(`${markdown}\n`);
+  return { bytes: Buffer.byteLength(`${markdown}\n`, 'utf8') };
+}
+
+function exportTextMarkdown(event: IpcMainInvokeEvent, payload: TextMarkdownPayload): ListMarkdownResult {
+  assertTrustedSender(event);
+  const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : 'Flux note';
+  const markdown = typeof payload.markdown === 'string' ? payload.markdown.trim() : '';
+  if (!markdown) {
+    throw new Error('Write text before exporting.');
+  }
+
+  const directory = defaultMarkdownExportDir;
+  mkdirSync(directory, { recursive: true });
+  const { notePath } = uniqueMarkdownPath(directory, `${formatDateSlug(new Date())}-${slugify(title)}`);
+  writeFileSync(notePath, `${markdown}\n`, { encoding: 'utf8' });
+  void shell.openPath(directory);
+  return { filePath: notePath, directory };
+}
+
 function screenshotFromFile(filePath: string): FluxScreenshot {
   const image = nativeImage.createFromPath(filePath);
   const size = image.getSize();
@@ -1027,6 +1061,13 @@ function copyScreenshot(event: IpcMainInvokeEvent, payload: ScreenshotPayload) {
 
   clipboard.writeImage(image);
   return screenshotFromFile(filePath);
+}
+
+function deleteScreenshot(event: IpcMainInvokeEvent, payload: ScreenshotPayload) {
+  assertTrustedSender(event);
+  const filePath = normalizeScreenshotPath(payload);
+  rmSync(filePath, { force: true });
+  return listScreenshots();
 }
 
 async function saveScreenshot(event: IpcMainInvokeEvent, payload: ScreenshotPayload): Promise<ExportMarkdownResult> {
@@ -1154,7 +1195,7 @@ function createWindow() {
       { type: 'separator' },
       { role: 'cut', enabled: params.editFlags.canCut },
       { role: 'copy', enabled: hasText || params.editFlags.canCopy },
-      { role: 'paste', enabled: params.editFlags.canPaste },
+      { role: 'paste', enabled: params.isEditable || params.editFlags.canPaste },
       { role: 'selectAll', enabled: params.editFlags.canSelectAll }
     ];
 
@@ -1245,6 +1286,14 @@ app.whenReady().then(() => {
     return copyListMarkdown(event, payload);
   });
 
+  ipcMain.handle('text:copy-markdown', (event, payload: TextMarkdownPayload) => {
+    return copyTextMarkdown(event, payload);
+  });
+
+  ipcMain.handle('text:export-markdown', (event, payload: TextMarkdownPayload) => {
+    return exportTextMarkdown(event, payload);
+  });
+
   ipcMain.handle('screenshot:list', (event) => {
     assertTrustedSender(event);
     return listScreenshots();
@@ -1260,6 +1309,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('screenshot:save', (event, payload: ScreenshotPayload) => {
     return saveScreenshot(event, payload);
+  });
+
+  ipcMain.handle('screenshot:delete', (event, payload: ScreenshotPayload) => {
+    return deleteScreenshot(event, payload);
   });
 
   ipcMain.handle('screenshot:open-folder', (event) => {

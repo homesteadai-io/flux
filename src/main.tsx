@@ -708,6 +708,9 @@ function CaptureCard({
     envStatusMessage ??
     activeCaptureNote?.transcript ??
     'Capture a thought, paste raw text, or drop a key here before sending it somewhere useful.';
+  const captureText = scratchValue.trim() || activeCaptureNote?.transcript?.trim() || '';
+  const captureTitle = activeCaptureNote?.title || 'Flux capture';
+  const captureMarkdown = `# ${captureTitle}\n\n## Capture\n${captureText}\n`;
 
   useEffect(() => {
     setCopyStatus('idle');
@@ -726,26 +729,32 @@ function CaptureCard({
   };
 
   const copyMarkdown = async () => {
-    if (!activeCaptureNote || copyStatus === 'copying') {
+    if (!captureText || copyStatus === 'copying') {
       return;
     }
     setCopyStatus('copying');
     try {
-      const copied = await onCopyMarkdown(activeCaptureNote);
-      setCopyStatus(copied ? 'copied' : 'idle');
+      await requireFluxLibrary().copyTextMarkdown({
+        title: captureTitle,
+        markdown: captureMarkdown
+      });
+      setCopyStatus('copied');
     } catch {
       setCopyStatus('idle');
     }
   };
 
   const exportMarkdown = async () => {
-    if (!activeCaptureNote || exportStatus === 'exporting') {
+    if (!captureText || exportStatus === 'exporting') {
       return;
     }
     setExportStatus('exporting');
     try {
-      const exported = await onExportMarkdown(activeCaptureNote);
-      setExportStatus(exported ? 'exported' : 'idle');
+      await requireFluxLibrary().exportTextMarkdown({
+        title: captureTitle,
+        markdown: captureMarkdown
+      });
+      setExportStatus('exported');
     } catch {
       setExportStatus('idle');
     }
@@ -796,10 +805,10 @@ function CaptureCard({
       </div>
 
       <div className="card-actions">
-        <GlassButton onClick={copyMarkdown} disabled={!activeCaptureNote || copyStatus === 'copying'}>
+        <GlassButton onClick={copyMarkdown} disabled={!captureText || copyStatus === 'copying'}>
           {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
         </GlassButton>
-        <GlassButton onClick={exportMarkdown} disabled={!activeCaptureNote || exportStatus === 'exporting'}>
+        <GlassButton onClick={exportMarkdown} disabled={!captureText || exportStatus === 'exporting'}>
           {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export notes'}
         </GlassButton>
         <GlassButton onClick={clearCapture} disabled={!scratchValue.trim() && !activeCaptureNote}>
@@ -828,6 +837,7 @@ function YouTubeCard({
   const activeYoutubeNote = clearedTranscriptKey === transcriptKey ? null : youtubeNote;
   const isBusy = captureStatus === 'importing' || captureStatus === 'saving' || captureStatus === 'recording';
   const transcript = activeYoutubeNote?.transcript || activeYoutubeNote?.transcriptPreview || '';
+  const youtubeMarkdown = `# YouTube transcript\n\n## Transcript\n${transcript.trim()}\n`;
 
   useEffect(() => {
     setCopyStatus('idle');
@@ -846,13 +856,16 @@ function YouTubeCard({
   };
 
   const copyMarkdown = async () => {
-    if (!activeYoutubeNote || copyStatus === 'copying') {
+    if (!transcript.trim() || copyStatus === 'copying') {
       return;
     }
     setCopyStatus('copying');
     try {
-      const copied = await onCopyMarkdown(activeYoutubeNote);
-      setCopyStatus(copied ? 'copied' : 'idle');
+      await requireFluxLibrary().copyTextMarkdown({
+        title: activeYoutubeNote?.title || 'YouTube transcript',
+        markdown: youtubeMarkdown
+      });
+      setCopyStatus('copied');
     } catch {
       setCopyStatus('idle');
     }
@@ -909,7 +922,7 @@ function YouTubeCard({
       </form>
 
       <div className="card-actions">
-        <GlassButton onClick={copyMarkdown} disabled={!activeYoutubeNote || copyStatus === 'copying'}>
+        <GlassButton onClick={copyMarkdown} disabled={!transcript.trim() || copyStatus === 'copying'}>
           {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
         </GlassButton>
         <GlassButton onClick={exportMarkdown} disabled={!activeYoutubeNote || exportStatus === 'exporting'}>
@@ -990,6 +1003,23 @@ function ScreenshotTrayCard() {
     }
   };
 
+  const deleteImage = async () => {
+    if (!selectedScreenshot) {
+      return;
+    }
+
+    try {
+      const nextScreenshots = await requireFluxLibrary().deleteScreenshot({
+        filePath: selectedScreenshot.filePath
+      });
+      setScreenshots(nextScreenshots);
+      setSelectedPath(nextScreenshots[0]?.filePath || '');
+      setStatus('idle');
+    } catch {
+      setStatus('idle');
+    }
+  };
+
   const openFolder = async () => {
     try {
       await requireFluxLibrary().openScreenshotsFolder();
@@ -1002,9 +1032,7 @@ function ScreenshotTrayCard() {
     <section className="glass-pane workbench-card screenshot-card" aria-label="Screenshot tray">
       <WorkbenchHeader />
       <div className="card-topline">
-        <GlassButton onClick={copyImage} disabled={!selectedScreenshot || status === 'copying'}>
-          {status === 'copying' ? 'Copying...' : status === 'copied' ? 'Copied' : 'Copy image'}
-        </GlassButton>
+        <span className="tray-status">{selectedScreenshot ? selectedScreenshot.fileName : 'No screenshot selected'}</span>
         <button
           type="button"
           className="mini-mic screen-capture-button"
@@ -1038,10 +1066,16 @@ function ScreenshotTrayCard() {
       </div>
 
       <div className="card-actions">
+        <GlassButton onClick={copyImage} disabled={!selectedScreenshot || status === 'copying'}>
+          {status === 'copying' ? 'Copying...' : status === 'copied' ? 'Copied' : 'Copy image'}
+        </GlassButton>
         <GlassButton onClick={saveImage} disabled={!selectedScreenshot || status === 'saving'}>
           {status === 'saving' ? 'Saving...' : status === 'saved' ? 'Saved' : 'Save image'}
         </GlassButton>
         <GlassButton onClick={openFolder}>Open folder</GlassButton>
+        <GlassButton onClick={deleteImage} disabled={!selectedScreenshot}>
+          Delete
+        </GlassButton>
       </div>
     </section>
   );

@@ -1006,6 +1006,16 @@ svg path {
   height: 98px;
 }
 
+.tray-status {
+  max-width: 250px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 12px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .large-capture-box,
 .analysis-box,
 .screenshot-tray,
@@ -1158,6 +1168,10 @@ svg path {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: auto;
+}
+
+.screenshot-card .card-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .screenshot-tray {
