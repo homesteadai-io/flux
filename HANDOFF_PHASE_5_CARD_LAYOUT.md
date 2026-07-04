@@ -11,7 +11,7 @@
 Adam approved the two-page glass workbench direction:
 
 - Front page:
-  - Left: Capture / voice / pasted text / `.env.local`
+  - Left: Capture / voice / pasted text
   - Right: YouTube transcript
 - Back page:
   - Left: Screenshot tray
@@ -40,21 +40,9 @@ Adam approved the two-page glass workbench direction:
 
 ### `.env.local` Save
 
-File: `electron/main.ts`
+The visible `Save .env` button was removed from the active Capture card after desktop QA showed the OS folder-picker flow still failed in Adam's live app.
 
-- `Save .env` still opens a folder picker.
-- Output filename remains exactly `.env.local`.
-- Save now writes UTF-8 with a trailing newline.
-- Save now verifies the file exists and the content matches before returning success.
-- Existing `.env.local` overwrite prompt names `.env.local` before clobbering.
-
-Adam still needs to manually retry this once:
-
-```text
-TEST_FLUX=1
-```
-
-Pick any folder and confirm `.env.local` is created.
+The Electron IPC code still exists, but do not expose it again without a focused desktop QA pass.
 
 ### YouTube Button Simplification
 
@@ -138,10 +126,8 @@ Start-Process -FilePath 'cmd.exe' -ArgumentList '/c npm.cmd run dev' -WorkingDir
 ## Next Agent Order Of Operations
 
 1. Do not start per-note chat.
-2. Ask Adam to confirm whether `.env.local` save now works after the latest restart.
-3. Have Adam QA:
+2. Have Adam QA:
    - YouTube right-click paste
-   - `.env.local` save and Explorer reveal
    - Capture Copy `.md` / Export notes
    - List Copy / Export
    - Screenshot capture/copy/save/open folder

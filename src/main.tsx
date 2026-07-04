@@ -630,7 +630,6 @@ type WorkbenchProps = {
   envStatusMessage: string | null;
   onToggleRecording: () => void;
   onSubmitYouTube: (url: string) => void;
-  onSaveEnvLocal: (content: string) => Promise<boolean>;
   onCopyMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
   onExportMarkdown: (note: FluxNoteSummary) => Promise<boolean>;
 };
@@ -677,7 +676,6 @@ function CaptureCard({
   errorMessage,
   envStatusMessage,
   onToggleRecording,
-  onSaveEnvLocal,
   onCopyMarkdown,
   onExportMarkdown
 }: Pick<
@@ -688,7 +686,6 @@ function CaptureCard({
   | 'errorMessage'
   | 'envStatusMessage'
   | 'onToggleRecording'
-  | 'onSaveEnvLocal'
   | 'onCopyMarkdown'
   | 'onExportMarkdown'
 >) {
@@ -717,16 +714,6 @@ function CaptureCard({
     setExportStatus('idle');
     setClearedCaptureKey('');
   }, [captureNote?.id, captureNote?.folder]);
-
-  const saveEnvLocal = async () => {
-    if (!scratchValue.trim() || isBusy) {
-      return;
-    }
-    const didSave = await onSaveEnvLocal(scratchValue);
-    if (didSave) {
-      setScratchValue('');
-    }
-  };
 
   const copyMarkdown = async () => {
     if (!captureText || copyStatus === 'copying') {
@@ -773,9 +760,7 @@ function CaptureCard({
     <section className="glass-pane workbench-card capture-card" aria-label="Flux capture">
       <WorkbenchHeader />
       <div className="card-topline">
-        <GlassButton onClick={saveEnvLocal} disabled={!scratchValue.trim() || isBusy}>
-          Save .env
-        </GlassButton>
+        <span />
         <button
           type="button"
           className={captureStatus === 'recording' ? 'mini-mic is-recording' : 'mini-mic'}
@@ -1260,7 +1245,6 @@ function CardWorkbench(props: WorkbenchProps) {
           errorMessage={props.errorMessage}
           envStatusMessage={props.envStatusMessage}
           onToggleRecording={props.onToggleRecording}
-          onSaveEnvLocal={props.onSaveEnvLocal}
           onCopyMarkdown={props.onCopyMarkdown}
           onExportMarkdown={props.onExportMarkdown}
         />
@@ -1570,7 +1554,6 @@ function App() {
         envStatusMessage={envStatusMessage}
         onToggleRecording={toggleRecording}
         onSubmitYouTube={submitYouTube}
-        onSaveEnvLocal={saveEnvLocal}
         onCopyMarkdown={copyMarkdown}
         onExportMarkdown={exportMarkdown}
       />
