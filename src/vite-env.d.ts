@@ -19,7 +19,7 @@ interface FluxAnalysis {
 interface FluxNoteSummary {
   id: string;
   title: string;
-  source: 'voice' | 'youtube';
+  source: 'text' | 'voice' | 'youtube';
   created: string;
   folder: string;
   url?: string;
@@ -89,9 +89,13 @@ interface FluxLibraryApi {
   saveScreenshot: (payload: { filePath: string }) => Promise<FluxExportMarkdownResult>;
   deleteScreenshot: (payload: { filePath: string }) => Promise<FluxScreenshot[]>;
   openScreenshotsFolder: () => Promise<{ directory: string }>;
+  readWorkingList: () => Promise<{ title: string; items: string[] }>;
+  saveWorkingList: (payload: { title: string; items: string[] }) => Promise<{ title: string; items: string[] }>;
+  readCaptureDraft: () => Promise<{ text: string }>;
+  saveCaptureDraft: (payload: { text: string }) => Promise<{ text: string }>;
 }
 
 interface Window {
-  fluxWindow: FluxWindowApi;
-  fluxLibrary: FluxLibraryApi;
+  fluxWindow?: FluxWindowApi;
+  fluxLibrary?: FluxLibraryApi;
 }

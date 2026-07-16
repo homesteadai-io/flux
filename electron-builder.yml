@@ -1,0 +1,15 @@
+appId: io.homesteadai.flux
+productName: Flux
+directories:
+  output: release/desktop
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  - from: scripts/transcript.cjs
+    to: scripts/transcript.cjs
+asar: true
+win:
+  target:
+    - target: dir

@@ -1,31 +1,39 @@
 {
   "name": "flux",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://127.0.0.1:5173 dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://127.0.0.1:5173 dist-electron/electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "tsc -p tsconfig.electron.json && tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.electron.json && tsc -p tsconfig.json --noEmit",
-    "watch": "node scripts/watch.cjs"
+    "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.mcp.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "watch": "node scripts/watch.cjs",
+    "test": "node --import tsx --test --test-concurrency=1 server/*.test.ts mcp/*.test.ts",
+    "package:win": "npm run build && electron-builder --win dir",
+    "mcpb:build": "node scripts/build-mcpb.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@vitejs/plugin-react": "^4.3.4",
     "openai": "^6.45.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "tsx": "^4.20.6",
     "wait-on": "^8.0.1"
   }
 }

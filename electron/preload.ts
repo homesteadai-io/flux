@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('fluxLibrary', {
     ipcRenderer.invoke('text:copy-markdown', payload),
   exportTextMarkdown: (payload: { title: string; markdown: string }) =>
     ipcRenderer.invoke('text:export-markdown', payload),
+  readWorkingList: () => ipcRenderer.invoke('working-list:read'),
+  saveWorkingList: (payload: { title: string; items: string[] }) =>
+    ipcRenderer.invoke('working-list:save', payload),
+  readCaptureDraft: () => ipcRenderer.invoke('capture-draft:read'),
+  saveCaptureDraft: (payload: { text: string }) =>
+    ipcRenderer.invoke('capture-draft:save', payload),
   listScreenshots: () => ipcRenderer.invoke('screenshot:list'),
   captureScreenshot: () => ipcRenderer.invoke('screenshot:capture'),
   copyScreenshot: (payload: { filePath: string }) => ipcRenderer.invoke('screenshot:copy', payload),

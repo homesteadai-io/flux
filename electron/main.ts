@@ -13,6 +13,9 @@ import {
   shell
 } from 'electron';
 import OpenAI, { toFile } from 'openai';
+import { FluxCore } from '../server/flux-core.js';
+import { startFluxHttpServer } from '../server/http-server.js';
+import type { FluxSaveRecordingPayload, FluxSaveYouTubePayload } from '../shared/flux-contract.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -152,7 +155,14 @@ type TranscriptEngineResult =
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const transcriptEngine = require(path.join(__dirname, '../scripts/transcript.cjs')) as {
+const transcriptEnginePath = [
+  path.resolve(__dirname, '../../scripts/transcript.cjs'),
+  path.resolve(process.resourcesPath, 'scripts/transcript.cjs')
+].find((candidate) => existsSync(candidate));
+if (!transcriptEnginePath) {
+  throw new Error('Flux transcript engine is missing.');
+}
+const transcriptEngine = require(transcriptEnginePath) as {
   getCleanTranscript: (url: string) => Promise<TranscriptEngineResult>;
 };
 const defaultBounds: WindowBounds = { width: 980, height: 660 };
@@ -168,6 +178,8 @@ const defaultMarkdownExportDir = path.join(
 );
 const settingsDir = path.join(defaultDataDir, '.flux');
 const settingsPath = path.join(settingsDir, 'settings.json');
+let fluxCore: FluxCore;
+let fluxBrowserHost: Awaited<ReturnType<typeof startFluxHttpServer>> | undefined;
 const allowedLocalEnvKeys = new Set([
   'OPENAI_API_KEY',
   'OPENAI_TRANSCRIPTION_MODEL',
@@ -190,8 +202,11 @@ function writeSettings(settings: FluxSettings) {
 }
 
 function loadLocalEnv() {
-  const envPath = path.join(app.getAppPath(), '.env.local');
-  if (!existsSync(envPath)) {
+  const envPath = [
+    path.join(defaultDataDir, '.flux', '.env.local'),
+    path.join(app.getAppPath(), '.env.local')
+  ].find((candidate) => existsSync(candidate));
+  if (!envPath) {
     return;
   }
 
@@ -1204,14 +1219,30 @@ function createWindow() {
 
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
+  } else if (fluxBrowserHost) {
+    void mainWindow.loadURL(fluxBrowserHost.url);
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    void mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'));
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   loadLocalEnv();
   ensureLibrary();
+  fluxCore = new FluxCore({
+    dataDir: getDataDir(),
+    aiProviderFactory: createOpenAIProvider
+  });
+
+  try {
+    fluxBrowserHost = await startFluxHttpServer({
+      core: fluxCore,
+      staticDir: path.join(app.getAppPath(), 'dist')
+    });
+  } catch {
+    fluxBrowserHost = undefined;
+    console.error('Flux browser host could not start; desktop fallback remains available.');
+  }
 
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const requestingUrl =
@@ -1236,33 +1267,30 @@ app.whenReady().then(() => {
 
   ipcMain.handle('library:list', (event) => {
     assertTrustedSender(event);
-    return listLibrary();
+    return fluxCore.listLibrary();
   });
 
   ipcMain.handle('library:create-folder', (event, payload: { name: string }) => {
     assertTrustedSender(event);
-    const dataDir = ensureLibrary();
-    const folder = sanitizeFolderName(payload.name);
-    mkdirSync(path.join(dataDir, folder), { recursive: true });
-    return { folder, library: listLibrary() };
+    return fluxCore.createFolder(payload.name);
   });
 
   ipcMain.handle(
     'library:move-note',
     (event, payload: { noteId: string; targetFolder: string }) => {
       assertTrustedSender(event);
-      return moveNote(payload.noteId, payload.targetFolder);
+      return fluxCore.moveNote(payload.noteId, payload.targetFolder);
     }
   );
 
-  ipcMain.handle('capture:save-recording', (event, payload: SaveRecordingPayload) => {
+  ipcMain.handle('capture:save-recording', (event, payload: FluxSaveRecordingPayload) => {
     assertTrustedSender(event);
-    return saveRecording(payload);
+    return fluxCore.saveRecording(payload);
   });
 
-  ipcMain.handle('capture:save-youtube-url', (event, payload: SaveYouTubePayload) => {
+  ipcMain.handle('capture:save-youtube-url', (event, payload: FluxSaveYouTubePayload) => {
     assertTrustedSender(event);
-    return saveYouTubeUrl(payload);
+    return fluxCore.saveYouTubeUrl(payload);
   });
 
   ipcMain.handle('capture:save-env-local', (event, payload: SaveEnvPayload) => {
@@ -1292,6 +1320,26 @@ app.whenReady().then(() => {
 
   ipcMain.handle('text:export-markdown', (event, payload: TextMarkdownPayload) => {
     return exportTextMarkdown(event, payload);
+  });
+
+  ipcMain.handle('working-list:read', (event) => {
+    assertTrustedSender(event);
+    return fluxCore.readWorkingList();
+  });
+
+  ipcMain.handle('working-list:save', (event, payload: { title: string; items: string[] }) => {
+    assertTrustedSender(event);
+    return fluxCore.saveWorkingList(payload);
+  });
+
+  ipcMain.handle('capture-draft:read', (event) => {
+    assertTrustedSender(event);
+    return fluxCore.readCaptureDraft();
+  });
+
+  ipcMain.handle('capture-draft:save', (event, payload: { text: string }) => {
+    assertTrustedSender(event);
+    return fluxCore.saveCaptureDraft(payload);
   });
 
   ipcMain.handle('screenshot:list', (event) => {
@@ -1326,6 +1374,13 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+app.on('before-quit', () => {
+  if (fluxBrowserHost) {
+    void fluxBrowserHost.close();
+    fluxBrowserHost = undefined;
+  }
 });
 
 app.on('window-all-closed', () => {

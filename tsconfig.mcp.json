@@ -7,10 +7,9 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "rootDir": ".",
-    "outDir": "dist-electron",
     "types": ["node"],
-    "sourceMap": true
+    "noEmit": true
   },
-  "include": ["electron/**/*.ts", "server/**/*.ts", "shared/**/*.ts"],
+  "include": ["mcp/**/*.ts", "server/**/*.ts", "shared/**/*.ts"],
   "exclude": ["**/*.test.ts"]
 }

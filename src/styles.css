@@ -1250,8 +1250,17 @@ svg path {
   flex: 1 1 auto;
   min-height: 370px;
   padding: 22px;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto 16px minmax(0, 1fr);
   align-content: start;
+}
+
+.list-box > .shared-save-status {
+  min-height: 16px;
+  margin-top: 4px;
+  color: rgba(255, 142, 151, 0.92);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .list-title-input {
@@ -1420,6 +1429,37 @@ svg path {
   .workbench-card {
     min-height: 580px;
     padding: 0 22px 24px;
+  }
+}
+
+@media (max-width: 520px) {
+  .card-workbench {
+    padding: 12px 14px 78px;
+  }
+
+  .workbench-card {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .card-actions {
+    gap: 8px;
+  }
+
+  .glass-button {
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: normal;
+  }
+
+  .screenshot-card {
+    min-height: 650px;
+  }
+
+  .screenshot-card .card-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

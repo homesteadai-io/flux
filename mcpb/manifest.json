@@ -1,0 +1,65 @@
+{
+  "manifest_version": "0.4",
+  "name": "flux",
+  "display_name": "Flux",
+  "version": "1.0.0",
+  "description": "Bounded local access to the Flux note library and current working list.",
+  "long_description": "Use Flux through six bounded MCP tools that list, read, and create local notes, fetch complete native YouTube captions, and read or replace the current working list. The bundle does not expose arbitrary files, deletion, shell commands, cloud sync, messages, agent routing, or secrets.",
+  "author": {
+    "name": "Flux"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "mcp/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/mcp/server.js"
+      ],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "flux_list_notes",
+      "description": "List Flux note metadata with optional folder and source filters."
+    },
+    {
+      "name": "flux_read_note",
+      "description": "Read one complete Markdown note by stable identifier and folder."
+    },
+    {
+      "name": "flux_create_note",
+      "description": "Save user-provided text as a local Markdown note."
+    },
+    {
+      "name": "flux_fetch_youtube_transcript",
+      "description": "Fetch native YouTube captions and save the complete transcript locally."
+    },
+    {
+      "name": "flux_read_working_list",
+      "description": "Read the current Flux working list."
+    },
+    {
+      "name": "flux_save_working_list",
+      "description": "Replace the current Flux working list with an explicit title and items."
+    }
+  ],
+  "tools_generated": false,
+  "keywords": [
+    "notes",
+    "youtube",
+    "transcripts",
+    "working-list",
+    "local"
+  ],
+  "license": "UNLICENSED",
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18"
+    }
+  }
+}
