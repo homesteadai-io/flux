@@ -282,7 +282,11 @@ export async function startFluxHttpServer({
       }
       serveStatic(response, staticDir, url.pathname);
     } catch (error) {
-      sendError(response, error instanceof SyntaxError ? 400 : 422, error);
+      if (error instanceof SyntaxError) {
+        sendError(response, 400, new Error('Request body must contain valid JSON.'));
+        return;
+      }
+      sendError(response, 422, new Error('Flux could not complete that request.'));
     }
   });
 

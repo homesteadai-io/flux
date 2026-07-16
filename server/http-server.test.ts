@@ -142,3 +142,26 @@ test('validates and saves the shared working list', async () => {
     await host.close();
   }
 });
+
+test('redacts lower-level paths from unexpected API errors', async () => {
+  const staticDir = mkdtempSync(path.join(os.tmpdir(), 'flux-http-'));
+  writeFileSync(path.join(staticDir, 'index.html'), '<main>Flux</main>');
+  const core = {
+    ...makeCore(),
+    listLibrary: () => {
+      throw new Error('Failed to read C:\\Users\\Adam\\Flux\\.flux\\state.json');
+    }
+  };
+  const host = await startFluxHttpServer({ core, staticDir, port: 0 });
+
+  try {
+    const response = await fetch(`${host.url}/api/library`);
+    const body = (await response.json()) as { error: string };
+
+    assert.equal(response.status, 422);
+    assert.equal(body.error, 'Flux could not complete that request.');
+    assert.doesNotMatch(JSON.stringify(body), /Users|state\.json|\\\\/);
+  } finally {
+    await host.close();
+  }
+});
