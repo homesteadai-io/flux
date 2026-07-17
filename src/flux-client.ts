@@ -60,7 +60,7 @@ async function readMarkdown(payload: { noteId: string; folder: string }) {
   return requestJson<{ markdown: string; note: FluxNoteSummary }>(`/notes/read?${query}`);
 }
 
-const browserLibrary: FluxLibraryApi = {
+export const browserLibrary: FluxLibraryApi = {
   list: () => requestJson('/library'),
   createFolder: (name) =>
     requestJson('/folders', { method: 'POST', body: JSON.stringify({ name }) }),
@@ -76,7 +76,9 @@ const browserLibrary: FluxLibraryApi = {
     }),
   saveYouTubeUrl: ({ url }) =>
     requestJson('/youtube', { method: 'POST', body: JSON.stringify({ url }) }),
-  saveEnvLocal: async () => ({ canceled: true }),
+  saveEnvLocal: async () => {
+    throw new Error('Save as .env is available in the Flux desktop app.');
+  },
   copyMarkdown: async (payload) => {
     const document = await readMarkdown(payload);
     await copyText(document.markdown);
