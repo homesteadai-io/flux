@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { fluxWorkingListItemLimit } from '../shared/flux-contract.js';
 import type { FluxCoreOptions } from '../shared/flux-contract.js';
 import { FluxCore } from './flux-core.js';
 
@@ -110,6 +111,19 @@ test('working list has one persistent JSON-backed value per data directory', (t)
   );
 });
 
+test('working list preserves the shared limit and rejects overflow', (t) => {
+  const { core } = createTestCore(t);
+  const items = Array.from({ length: fluxWorkingListItemLimit }, (_, index) => 'Item ' + index);
+
+  const saved = core.saveWorkingList({ title: 'Maximum list', items });
+  assert.equal(saved.items.length, fluxWorkingListItemLimit);
+  assert.equal(saved.items.at(-1), 'Item 999');
+  assert.throws(
+    () => core.saveWorkingList({ title: 'Overflow list', items: [...items, 'Item 1000'] }),
+    /cannot exceed 1000 items/
+  );
+});
+
 test('capture draft persists exact text in one JSON-backed value', (t) => {
   const { core, dataDir } = createTestCore(t);
   assert.deepEqual(core.readCaptureDraft(), { text: '' });
@@ -171,6 +185,10 @@ test('saveYouTubeUrl reads heading-like transcript lines through the tail unchan
     'This heading belongs to the transcript.',
     '## Follow-up context',
     'This heading also belongs to the transcript.',
+    '## AI Analysis',
+    'This is transcript text, not note analysis.',
+    '## Next Steps',
+    '- [ ] This is also transcript text.',
     'TAIL_MARKER'
   ].join('\n');
   const { core } = createTestCore(t, {
@@ -186,6 +204,7 @@ test('saveYouTubeUrl reads heading-like transcript lines through the tail unchan
 
   assert.equal(read.note.transcript, fullTranscript);
   assert.equal(read.note.transcript.endsWith('TAIL_MARKER'), true);
+  assert.equal(read.note.analysis, undefined);
 });
 
 test('saveRecording persists audio before injected transcription and analysis', async (t) => {

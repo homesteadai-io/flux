@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fluxWorkingListItemLimit } from '../shared/flux-contract.js';
 import type {
   FluxAIProvider,
   FluxAIProviderFactory,
@@ -161,8 +162,11 @@ function extractListItems(section: string) {
 }
 
 function extractAnalysis(markdown: string, meta: Record<string, string>): FluxAnalysis | undefined {
-  const topline = extractSection(markdown, 'AI Analysis');
-  const nextSteps = extractListItems(extractSection(markdown, 'Next Steps'));
+  const lines = markdown.split(/\r?\n/);
+  const transcriptIndex = lines.findIndex((line) => line.trim() === '## Transcript');
+  const analysisRegion = transcriptIndex === -1 ? markdown : lines.slice(0, transcriptIndex).join('\n');
+  const topline = extractSection(analysisRegion, 'AI Analysis');
+  const nextSteps = extractListItems(extractSection(analysisRegion, 'Next Steps'));
 
   if (!topline && nextSteps.length === 0) {
     return undefined;
@@ -539,6 +543,9 @@ export class FluxCore {
     if (!Array.isArray(items) || items.some((item) => typeof item !== 'string')) {
       throw new Error('Working list items must be text.');
     }
+    if (items.length > fluxWorkingListItemLimit) {
+      throw new Error(`Working list cannot exceed ${fluxWorkingListItemLimit} items.`);
+    }
 
     const workingList: FluxWorkingList = {
       title: normalizedTitle,
@@ -751,6 +758,7 @@ export class FluxCore {
     const title = normalizeTitle(candidate.title, 'Flux working list title is invalid.');
     if (
       !Array.isArray(candidate.items) ||
+      candidate.items.length > fluxWorkingListItemLimit ||
       candidate.items.some((item) => typeof item !== 'string') ||
       (candidate.updatedAt !== undefined && typeof candidate.updatedAt !== 'string')
     ) {

@@ -7,6 +7,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { FluxCore } from '../server/flux-core.js';
+import { fluxWorkingListItemLimit } from '../shared/flux-contract.js';
 import type {
   FluxNoteSource,
   FluxNoteSummary,
@@ -28,7 +29,6 @@ type FluxNoteMetadata = Omit<FluxNoteSummary, 'transcript'>;
 const SOURCE_VALUES = ['text', 'voice', 'youtube'] as const satisfies readonly FluxNoteSource[];
 const MAX_TITLE_LENGTH = 240;
 const MAX_CONTENT_LENGTH = 1_000_000;
-const MAX_LIST_ITEMS = 1_000;
 
 const boundedText = (label: string, maximum: number) =>
   z.string().trim().min(1, `${label} is required.`).max(maximum, `${label} is too long.`);
@@ -217,7 +217,7 @@ export function buildMcpServer(core: FluxMcpCore): McpServer {
           title: boundedText('Title', MAX_TITLE_LENGTH),
           items: z
             .array(boundedText('Working-list item', 10_000))
-            .max(MAX_LIST_ITEMS, 'The working list has too many items.'),
+            .max(fluxWorkingListItemLimit, 'The working list has too many items.'),
         })
         .strict(),
       annotations: {

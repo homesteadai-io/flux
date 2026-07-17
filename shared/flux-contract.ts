@@ -1,5 +1,7 @@
 export type FluxNoteSource = 'text' | 'voice' | 'youtube';
 
+export const fluxWorkingListItemLimit = 1_000;
+
 export type FluxAnalysis = {
   model: string;
   topline: string;

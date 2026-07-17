@@ -4,6 +4,7 @@ import { request } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fluxWorkingListItemLimit } from '../shared/flux-contract.js';
 import { startFluxHttpServer } from './http-server.js';
 
 function makeCore() {
@@ -131,13 +132,21 @@ test('validates and saves the shared working list', async () => {
   const host = await startFluxHttpServer({ core: makeCore(), staticDir, port: 0 });
 
   try {
+    const items = Array.from({ length: fluxWorkingListItemLimit }, (_, index) => 'Item ' + index);
     const response = await fetch(`${host.url}/api/working-list`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Launch', items: ['Build', 'Review'] })
+      body: JSON.stringify({ title: 'Launch', items })
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { title: 'Launch', items: ['Build', 'Review'] });
+    assert.deepEqual(await response.json(), { title: 'Launch', items });
+
+    const overflow = await fetch(`${host.url}/api/working-list`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Overflow', items: [...items, 'Item 1000'] })
+    });
+    assert.equal(overflow.status, 422);
   } finally {
     await host.close();
   }

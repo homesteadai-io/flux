@@ -2,6 +2,8 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 
+import { fluxWorkingListItemLimit } from '../shared/flux-contract.js';
+
 export const fluxHttpHost = '127.0.0.1';
 export const fluxHttpPort = 4783;
 
@@ -232,12 +234,15 @@ async function handleApi(
     if (!Array.isArray(body.items) || body.items.some((item) => typeof item !== 'string')) {
       throw new Error('items must be an array of text values.');
     }
+    if (body.items.length > fluxWorkingListItemLimit) {
+      throw new Error('The working list has too many items.');
+    }
     sendJson(
       response,
       200,
       await core.saveWorkingList({
         title: typeof body.title === 'string' ? body.title : '',
-        items: body.items.slice(0, 500) as string[]
+        items: body.items as string[]
       })
     );
     return;

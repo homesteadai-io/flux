@@ -206,11 +206,20 @@ test('rejects path-like identifiers and non-YouTube transcript URLs before core 
       name: 'flux_fetch_youtube_transcript',
       arguments: { url: 'https://example.com/watch?v=abc123' },
     });
+    const listResult = await connection.client.callTool({
+      name: 'flux_save_working_list',
+      arguments: {
+        title: 'Overflow',
+        items: Array.from({ length: 1_001 }, (_, index) => 'Item ' + index),
+      },
+    });
 
     assert.equal(pathResult.isError, true);
     assert.equal(urlResult.isError, true);
+    assert.equal(listResult.isError, true);
     assert.equal(core.calls.some((call) => call.method === 'readNote'), false);
     assert.equal(core.calls.some((call) => call.method === 'saveYouTubeUrl'), false);
+    assert.equal(core.calls.some((call) => call.method === 'saveWorkingList'), false);
   } finally {
     await connection.close();
   }
