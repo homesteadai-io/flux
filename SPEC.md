@@ -117,3 +117,64 @@ sending, or agent routing is added in this phase.
   of agent-generated test content.
 - Installing the MCPB into Claude or sending a Claude message without Adam's
   action-time approval.
+
+# Flux Phase 7 - Video Digest Queue
+
+## Authority and baseline
+
+- Adam selected the lightweight queue path, not video processing inside Flux.
+- This phase is stacked on the reviewed Phase 6 head
+  `38f8b3d16f64997eb857d8f32cd33a885d0babf9`.
+- Phase 6 PR #12 remains open and is not merged by this phase.
+- The approved four-card glass layout and existing YouTube transcript path remain
+  unchanged except for the new bounded action on the YouTube card.
+
+## Goal
+
+Let Adam mark one YouTube video as the current **Digest** request so a Control
+Room coding agent can read that request through Flux MCP, invoke its installed
+video-watching skill, and return a visual-plus-transcript summary without Adam
+watching the video or touching the clipboard.
+
+## Product contract
+
+- Add a `Digest` button beside `Generate` on the YouTube card.
+- The button may use either the URL currently pasted into the card or the source
+  URL of the displayed YouTube transcript.
+- Pressing `Digest` stores one current request in the shared Flux data directory.
+  A later explicit request replaces the prior request.
+- The UI reports `Queued` only after the request is durably stored. It must not
+  claim that the video was watched, analyzed, summarized, or delivered.
+- The complete native-caption transcript remains available and unchanged.
+- Desktop, browser, and MCP read the same request under `C:\Users\Adam\Flux`.
+- The request contains a validated HTTPS YouTube URL, request timestamp, and
+  optional source-note identity/title. It contains no API key or arbitrary path.
+- Add one read-only MCP tool, `flux_read_video_digest_request`, which returns the
+  current request. The agent decides whether and how to invoke its available
+  video-watching skill.
+
+## Hard boundaries
+
+- Flux does not download video, extract frames, call Whisper, invoke a shell, or
+  duplicate the Watch skill.
+- Flux does not send a message to Claude or Codex and does not claim control of
+  the active Control Room task.
+- No polling agent, background worker, cloud sync, delete operation, or arbitrary
+  filesystem access is added.
+- Existing six MCP tools keep their behavior; Phase 7 adds exactly one bounded
+  read-only tool.
+
+## Pass/fail checks
+
+1. A valid pasted YouTube URL can be queued from desktop and browser Flux.
+2. A displayed transcript with a source URL can be queued when the paste box is
+   empty.
+3. Invalid or non-YouTube URLs are rejected before durable state changes.
+4. Restarting Flux preserves the current digest request.
+5. `flux_read_video_digest_request` returns the same queued request and is marked
+   read-only, non-destructive, idempotent, and closed-world.
+6. The MCP server lists exactly seven tools and exposes no video execution or
+   shell capability.
+7. The transcript generation, copy, export, and clear controls still work.
+8. Typecheck, tests, browser build, desktop package, MCPB validation, visual QA,
+   and fresh review all pass on the final commit.

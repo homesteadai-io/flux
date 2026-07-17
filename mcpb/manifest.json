@@ -2,9 +2,9 @@
   "manifest_version": "0.4",
   "name": "flux",
   "display_name": "Flux",
-  "version": "1.0.0",
-  "description": "Bounded local access to the Flux note library and current working list.",
-  "long_description": "Use Flux through six bounded MCP tools that list, read, and create local notes, fetch complete native YouTube captions, and read or replace the current working list. The bundle does not expose arbitrary files, deletion, shell commands, cloud sync, messages, agent routing, or secrets.",
+  "version": "1.1.0",
+  "description": "Bounded local access to Flux notes, working list, and queued video digest.",
+  "long_description": "Use Flux through seven bounded MCP tools that list, read, and create local notes, fetch complete native YouTube captions, read or replace the current working list, and read the one current video digest request. The bundle cannot watch videos and does not expose arbitrary files, deletion, shell commands, cloud sync, messages, agent routing, or secrets.",
   "author": {
     "name": "Flux"
   },
@@ -41,6 +41,10 @@
       "description": "Read the current Flux working list."
     },
     {
+      "name": "flux_read_video_digest_request",
+      "description": "Read the current YouTube URL queued for an agent video digest."
+    },
+    {
       "name": "flux_save_working_list",
       "description": "Replace the current Flux working list with an explicit title and items."
     }
@@ -51,6 +55,7 @@
     "youtube",
     "transcripts",
     "working-list",
+    "video-digest",
     "local"
   ],
   "license": "UNLICENSED",

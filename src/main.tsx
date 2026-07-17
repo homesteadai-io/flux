@@ -878,18 +878,42 @@ function YouTubeCard({
   const [url, setUrl] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
   const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
+  const [digestStatus, setDigestStatus] = useState<'idle' | 'queueing' | 'queued' | 'failed'>('idle');
   const [clearedTranscriptKey, setClearedTranscriptKey] = useState('');
   const transcriptKey = youtubeNote ? `${youtubeNote.folder}/${youtubeNote.id}` : '';
   const activeYoutubeNote = clearedTranscriptKey === transcriptKey ? null : youtubeNote;
   const isBusy = captureStatus === 'importing' || captureStatus === 'saving' || captureStatus === 'recording';
   const transcript = activeYoutubeNote?.transcript || activeYoutubeNote?.transcriptPreview || '';
+  const digestUrl = url.trim() || activeYoutubeNote?.url || '';
+  const digestUrlRef = useRef(digestUrl);
+  digestUrlRef.current = digestUrl;
   const youtubeMarkdown = `# YouTube transcript\n\n## Transcript\n${transcript.trim()}\n`;
 
   useEffect(() => {
     setCopyStatus('idle');
     setExportStatus('idle');
+    setDigestStatus('idle');
     setClearedTranscriptKey('');
   }, [youtubeNote?.id, youtubeNote?.folder]);
+
+  useEffect(() => {
+    const sourceUrl = activeYoutubeNote?.url;
+    if (!sourceUrl || url.trim()) {
+      return;
+    }
+    let canceled = false;
+    void requireFluxLibrary()
+      .readVideoDigestRequest()
+      .then((request) => {
+        if (!canceled && request?.url === sourceUrl) {
+          setDigestStatus('queued');
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      canceled = true;
+    };
+  }, [activeYoutubeNote?.url, url]);
 
   const submitUrl = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -930,6 +954,27 @@ function YouTubeCard({
     }
   };
 
+  const queueDigest = async () => {
+    if (!digestUrl || digestStatus === 'queueing' || isBusy) {
+      return;
+    }
+    const requestedUrl = digestUrl;
+    setDigestStatus('queueing');
+    try {
+      const sourceNote =
+        activeYoutubeNote?.url === requestedUrl
+          ? { noteId: activeYoutubeNote.id, folder: activeYoutubeNote.folder }
+          : undefined;
+      await requireFluxLibrary().saveVideoDigestRequest({
+        url: requestedUrl,
+        ...(sourceNote ? { sourceNote } : {})
+      });
+      setDigestStatus(digestUrlRef.current === requestedUrl ? 'queued' : 'idle');
+    } catch {
+      setDigestStatus(digestUrlRef.current === requestedUrl ? 'failed' : 'idle');
+    }
+  };
+
   const clearTranscript = () => {
     setUrl('');
     if (transcriptKey) {
@@ -937,6 +982,7 @@ function YouTubeCard({
     }
     setCopyStatus('idle');
     setExportStatus('idle');
+    setDigestStatus('idle');
   };
 
   return (
@@ -951,7 +997,10 @@ function YouTubeCard({
         <IconLink />
         <textarea
           value={url}
-          onChange={(event) => setUrl(event.target.value)}
+          onChange={(event) => {
+            setUrl(event.target.value);
+            setDigestStatus('idle');
+          }}
           placeholder="Paste URL: YouTube"
           aria-label="Paste YouTube URL"
           rows={2}
@@ -964,6 +1013,21 @@ function YouTubeCard({
           aria-label="Generate YouTube transcript"
         >
           Generate
+        </button>
+        <button
+          type="button"
+          className="digest-button"
+          disabled={!digestUrl || isBusy || digestStatus === 'queueing'}
+          aria-label="Queue video for agent digest"
+          onClick={queueDigest}
+        >
+          {digestStatus === 'queueing'
+            ? 'Queuing...'
+            : digestStatus === 'queued'
+              ? 'Queued'
+              : digestStatus === 'failed'
+                ? 'Try again'
+                : 'Digest'}
         </button>
       </form>
 

@@ -38,6 +38,12 @@ interface FluxCaptureResult {
   library: FluxLibrarySnapshot;
 }
 
+interface FluxVideoDigestRequest {
+  url: string;
+  requestedAt: string;
+  sourceNote?: { noteId: string; folder: string; title: string };
+}
+
 type FluxSaveEnvResult =
   | { canceled: true }
   | { canceled: false; filePath: string; directory: string; overwritten: boolean };
@@ -76,6 +82,11 @@ interface FluxLibraryApi {
   moveNote: (noteId: string, folder: string, targetFolder: string) => Promise<FluxLibrarySnapshot>;
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) => Promise<FluxCaptureResult>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<FluxCaptureResult>;
+  readVideoDigestRequest: () => Promise<FluxVideoDigestRequest | null>;
+  saveVideoDigestRequest: (payload: {
+    url: string;
+    sourceNote?: { noteId: string; folder: string };
+  }) => Promise<FluxVideoDigestRequest>;
   saveEnvLocal: (payload: { content: string }) => Promise<FluxSaveEnvResult>;
   copyMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxCopyMarkdownResult>;
   exportMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxExportMarkdownResult>;

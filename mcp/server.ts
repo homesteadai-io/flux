@@ -20,6 +20,7 @@ export type FluxMcpCore = Pick<
   | 'readNote'
   | 'createTextNote'
   | 'saveYouTubeUrl'
+  | 'readVideoDigestRequest'
   | 'readWorkingList'
   | 'saveWorkingList'
 >;
@@ -109,10 +110,10 @@ async function safely(
 
 export function buildMcpServer(core: FluxMcpCore): McpServer {
   const server = new McpServer(
-    { name: 'flux', version: '1.0.0' },
+    { name: 'flux', version: '1.1.0' },
     {
       instructions:
-        'Flux provides bounded access to the local note library and current working list. It cannot delete notes, access arbitrary paths, run commands, or expose secrets.',
+        'Flux provides bounded access to the local note library, current working list, and current video digest request. It cannot watch videos, delete notes, access arbitrary paths, run commands, route agents, or expose secrets.',
     },
   );
 
@@ -209,6 +210,22 @@ export function buildMcpServer(core: FluxMcpCore): McpServer {
       safely('READ_WORKING_LIST_FAILED', 'Flux could not read the working list.', async () => {
         const workingList = await core.readWorkingList();
         return result({ ok: true, workingList });
+      }),
+  );
+
+  server.registerTool(
+    'flux_read_video_digest_request',
+    {
+      title: 'Read the Flux video digest request',
+      description:
+        'Read the current YouTube video queued for an agent digest. This returns the source URL only; use an available video-watching skill to inspect frames and transcript.',
+      inputSchema: z.object({}).strict(),
+      annotations: readOnlyAnnotations,
+    },
+    () =>
+      safely('READ_VIDEO_DIGEST_FAILED', 'Flux could not read the video digest request.', async () => {
+        const request = await core.readVideoDigestRequest();
+        return result({ ok: true, request });
       }),
   );
 

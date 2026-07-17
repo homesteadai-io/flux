@@ -11,6 +11,7 @@ import type {
   FluxReadNoteResult,
   FluxSaveWorkingListPayload,
   FluxSaveYouTubePayload,
+  FluxVideoDigestRequest,
   FluxWorkingList,
 } from '../shared/flux-contract.js';
 import { buildMcpServer, type FluxMcpCore } from './server.js';
@@ -48,6 +49,11 @@ class FakeFluxCore implements FluxMcpCore {
   };
 
   workingList: FluxWorkingList = { title: 'Today', items: ['Ship Flux'] };
+  videoDigestRequest: FluxVideoDigestRequest = {
+    url: 'https://www.youtube.com/watch?v=abc123',
+    requestedAt: '2026-07-16T13:30:00.000Z',
+    sourceNote: { noteId: 'note-2', folder: 'Research', title: 'Video note' },
+  };
   calls: Array<{ method: string; payload?: unknown }> = [];
 
   listLibrary(): FluxLibrarySnapshot {
@@ -68,6 +74,11 @@ class FakeFluxCore implements FluxMcpCore {
   async saveYouTubeUrl(payload: FluxSaveYouTubePayload): Promise<FluxNoteMutationResult> {
     this.calls.push({ method: 'saveYouTubeUrl', payload });
     return { note: youtubeNote, library: this.library };
+  }
+
+  readVideoDigestRequest(): FluxVideoDigestRequest {
+    this.calls.push({ method: 'readVideoDigestRequest' });
+    return this.videoDigestRequest;
   }
 
   readWorkingList(): FluxWorkingList {
@@ -102,7 +113,7 @@ function structured(result: Awaited<ReturnType<Client['callTool']>>): Record<str
   return result.structuredContent as Record<string, unknown>;
 }
 
-test('registers exactly the six Phase 6 Flux tools', async () => {
+test('registers exactly the seven Phase 7 Flux tools', async () => {
   const connection = await connect(new FakeFluxCore());
   try {
     const listed = await connection.client.listTools();
@@ -113,20 +124,28 @@ test('registers exactly the six Phase 6 Flux tools', async () => {
         'flux_fetch_youtube_transcript',
         'flux_list_notes',
         'flux_read_note',
+        'flux_read_video_digest_request',
         'flux_read_working_list',
         'flux_save_working_list',
       ],
     );
     const youtubeTool = listed.tools.find((tool) => tool.name === 'flux_fetch_youtube_transcript');
     const localWriteTool = listed.tools.find((tool) => tool.name === 'flux_create_note');
+    const digestTool = listed.tools.find((tool) => tool.name === 'flux_read_video_digest_request');
     assert.equal(youtubeTool?.annotations?.openWorldHint, true);
     assert.equal(localWriteTool?.annotations?.openWorldHint, false);
+    assert.deepEqual(digestTool?.annotations, {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
   } finally {
     await connection.close();
   }
 });
 
-test('routes all six tools and returns bounded structured payloads', async () => {
+test('routes all seven tools and returns bounded structured payloads', async () => {
   const core = new FakeFluxCore();
   const connection = await connect(core);
 
@@ -170,6 +189,12 @@ test('routes all six tools and returns bounded structured payloads', async () =>
     });
     assert.deepEqual(structured(readList).workingList, { title: 'Today', items: ['Ship Flux'] });
 
+    const digest = await connection.client.callTool({
+      name: 'flux_read_video_digest_request',
+      arguments: {},
+    });
+    assert.deepEqual(structured(digest).request, core.videoDigestRequest);
+
     const savedList = await connection.client.callTool({
       name: 'flux_save_working_list',
       arguments: { title: 'Tomorrow', items: ['Package Flux', 'Open the control room'] },
@@ -198,6 +223,7 @@ test('routes all six tools and returns bounded structured payloads', async () =>
         },
       ],
     );
+    assert.equal(core.calls.some((call) => call.method === 'readVideoDigestRequest'), true);
   } finally {
     await connection.close();
   }

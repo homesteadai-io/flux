@@ -13,6 +13,11 @@ type FluxHttpCore = {
   createTextNote: (payload: { title: string; content: string; folder?: string }) => unknown;
   saveRecording: (payload: { audioData: Uint8Array; mimeType: string }) => Promise<unknown>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<unknown>;
+  readVideoDigestRequest: () => unknown;
+  saveVideoDigestRequest: (payload: {
+    url: string;
+    sourceNote?: { noteId: string; folder: string };
+  }) => unknown;
   createFolder: (name: string) => unknown;
   moveNote: (locator: { noteId: string; folder: string }, targetFolder: string) => unknown;
   readWorkingList: () => unknown;
@@ -195,6 +200,33 @@ async function handleApi(
   if (method === 'POST' && pathname === '/api/youtube') {
     const body = await readJson(request);
     sendJson(response, 201, await core.saveYouTubeUrl({ url: requireString(body.url, 'url', 2048) }));
+    return;
+  }
+  if (method === 'GET' && pathname === '/api/video-digest-request') {
+    sendJson(response, 200, await core.readVideoDigestRequest());
+    return;
+  }
+  if (method === 'PUT' && pathname === '/api/video-digest-request') {
+    const body = await readJson(request);
+    let sourceNote: { noteId: string; folder: string } | undefined;
+    if (body.sourceNote !== undefined) {
+      if (!body.sourceNote || typeof body.sourceNote !== 'object' || Array.isArray(body.sourceNote)) {
+        throw new Error('sourceNote must be a note identifier and folder.');
+      }
+      const source = body.sourceNote as Record<string, unknown>;
+      sourceNote = {
+        noteId: requireString(source.noteId, 'sourceNote.noteId', 160),
+        folder: requireString(source.folder, 'sourceNote.folder', 64)
+      };
+    }
+    sendJson(
+      response,
+      200,
+      await core.saveVideoDigestRequest({
+        url: requireString(body.url, 'url', 2048),
+        ...(sourceNote ? { sourceNote } : {})
+      })
+    );
     return;
   }
   if (method === 'POST' && pathname === '/api/recordings') {

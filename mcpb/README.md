@@ -8,10 +8,11 @@ Flux MCPB gives Claude bounded access to the same local Flux state used by the d
 - `flux_read_note` reads one complete Markdown note by `noteId` and `folder`.
 - `flux_create_note` saves user-provided text as a local Markdown note.
 - `flux_fetch_youtube_transcript` fetches native YouTube captions and saves the complete transcript locally.
+- `flux_read_video_digest_request` reads the one current YouTube URL queued for an agent digest. It does not watch or download the video.
 - `flux_read_working_list` reads the one current working list.
 - `flux_save_working_list` replaces the current working list with an explicit title and items.
 
-The server has no tool for arbitrary file access, deletion, shell commands, secrets, cloud sync, messaging, or agent routing. Note identifiers and folders cannot contain paths, and transcript fetching accepts only HTTPS YouTube URLs.
+The server has no tool for video execution, arbitrary file access, deletion, shell commands, secrets, cloud sync, messaging, or agent routing. Note identifiers and folders cannot contain paths, and transcript fetching accepts only HTTPS YouTube URLs.
 
 ## Data
 

@@ -303,6 +303,45 @@ test('saveYouTubeUrl reads heading-like transcript lines through the tail unchan
   assert.equal(read.note.analysis, undefined);
 });
 
+test('video digest request is validated, durable, and preserves its source note', async (t) => {
+  const { core, dataDir } = createTestCore(t, {
+    transcriptEngine: {
+      async getCleanTranscript() {
+        return { ok: true, transcript: 'Complete captions for the queued video.' };
+      }
+    }
+  });
+  assert.equal(core.readVideoDigestRequest(), null);
+
+  const note = await core.saveYouTubeUrl({ url: 'https://youtu.be/digest-example' });
+  const queued = core.saveVideoDigestRequest({
+    url: note.note.url!,
+    sourceNote: { noteId: note.note.id, folder: note.note.folder }
+  });
+
+  assert.equal(queued.url, note.note.url);
+  assert.equal(Number.isFinite(Date.parse(queued.requestedAt)), true);
+  assert.deepEqual(queued.sourceNote, {
+    noteId: note.note.id,
+    folder: note.note.folder,
+    title: note.note.title
+  });
+  assert.deepEqual(new FluxCore({ dataDir }).readVideoDigestRequest(), queued);
+
+  const replaced = core.saveVideoDigestRequest({
+    url: 'https://www.youtube.com/watch?v=replacement'
+  });
+  assert.equal(replaced.url, 'https://www.youtube.com/watch?v=replacement');
+  assert.equal(replaced.sourceNote, undefined);
+  assert.deepEqual(new FluxCore({ dataDir }).readVideoDigestRequest(), replaced);
+
+  assert.throws(
+    () => core.saveVideoDigestRequest({ url: 'http://youtu.be/not-https' }),
+    /require an HTTPS YouTube URL/
+  );
+  assert.deepEqual(core.readVideoDigestRequest(), replaced);
+});
+
 test('saveRecording persists audio before injected transcription and analysis', async (t) => {
   const audioBytes = new Uint8Array([1, 2, 3, 4]);
   let observedAudioPath = '';

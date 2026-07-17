@@ -15,7 +15,11 @@ import {
 import OpenAI, { toFile } from 'openai';
 import { FluxCore } from '../server/flux-core.js';
 import { startFluxHttpServer } from '../server/http-server.js';
-import type { FluxSaveRecordingPayload, FluxSaveYouTubePayload } from '../shared/flux-contract.js';
+import type {
+  FluxSaveRecordingPayload,
+  FluxSaveVideoDigestRequestPayload,
+  FluxSaveYouTubePayload
+} from '../shared/flux-contract.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -1291,6 +1295,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('capture:save-youtube-url', (event, payload: FluxSaveYouTubePayload) => {
     assertTrustedSender(event);
     return fluxCore.saveYouTubeUrl(payload);
+  });
+
+  ipcMain.handle('video-digest:read', (event) => {
+    assertTrustedSender(event);
+    return fluxCore.readVideoDigestRequest();
+  });
+
+  ipcMain.handle('video-digest:save', (event, payload: FluxSaveVideoDigestRequestPayload) => {
+    assertTrustedSender(event);
+    return fluxCore.saveVideoDigestRequest(payload);
   });
 
   ipcMain.handle('capture:save-env-local', (event, payload: SaveEnvPayload) => {

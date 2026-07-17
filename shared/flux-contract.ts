@@ -60,6 +60,17 @@ export type FluxSaveYouTubePayload = {
   url: string;
 };
 
+export type FluxVideoDigestRequest = {
+  url: string;
+  requestedAt: string;
+  sourceNote?: FluxNoteLocator & { title: string };
+};
+
+export type FluxSaveVideoDigestRequestPayload = {
+  url: string;
+  sourceNote?: FluxNoteLocator;
+};
+
 export type FluxNoteMutationResult = {
   note: FluxNoteSummary;
   library: FluxLibrarySnapshot;

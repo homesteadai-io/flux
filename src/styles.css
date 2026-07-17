@@ -1121,7 +1121,7 @@ svg path {
 .inline-paste-box {
   min-height: 72px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;

@@ -9,12 +9,18 @@ import { startFluxHttpServer } from './http-server.js';
 
 function makeCore() {
   const workingList = { title: 'Test list', items: ['One'] };
+  let videoDigestRequest: unknown = null;
   return {
     listLibrary: () => ({ folders: [{ name: 'Inbox', count: 0 }], notes: [] }),
     readNote: ({ noteId, folder }: { noteId: string; folder: string }) => ({ noteId, folder, markdown: '# Note' }),
     createTextNote: (payload: unknown) => ({ payload }),
     saveRecording: async (payload: unknown) => ({ payload }),
     saveYouTubeUrl: async (payload: unknown) => ({ payload }),
+    readVideoDigestRequest: () => videoDigestRequest,
+    saveVideoDigestRequest: (payload: unknown) => {
+      videoDigestRequest = payload;
+      return payload;
+    },
     createFolder: (name: string) => ({ folder: name }),
     moveNote: (locator: { noteId: string; folder: string }, targetFolder: string) => ({ locator, targetFolder }),
     readWorkingList: () => workingList,
@@ -54,6 +60,42 @@ test('serves the built Flux shell and health endpoint on loopback', async () => 
 
     const health = await fetch(`${host.url}/api/health`);
     assert.deepEqual(await health.json(), { ok: true, product: 'Flux' });
+  } finally {
+    await host.close();
+  }
+});
+
+test('saves and reads the shared video digest request', async () => {
+  const staticDir = mkdtempSync(path.join(os.tmpdir(), 'flux-http-'));
+  writeFileSync(path.join(staticDir, 'index.html'), '<main>Flux</main>');
+  const host = await startFluxHttpServer({ core: makeCore(), staticDir, port: 0 });
+
+  try {
+    const empty = await fetch(`${host.url}/api/video-digest-request`);
+    assert.equal(empty.status, 200);
+    assert.equal(await empty.json(), null);
+
+    const payload = {
+      url: 'https://youtu.be/digest-example',
+      sourceNote: { noteId: 'youtube-note', folder: 'Transcript Notes' }
+    };
+    const saved = await fetch(`${host.url}/api/video-digest-request`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), payload);
+
+    const read = await fetch(`${host.url}/api/video-digest-request`);
+    assert.deepEqual(await read.json(), payload);
+
+    const malformed = await fetch(`${host.url}/api/video-digest-request`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: payload.url, sourceNote: 'not-a-note' })
+    });
+    assert.equal(malformed.status, 422);
   } finally {
     await host.close();
   }

@@ -32,9 +32,11 @@ import type {
   FluxReadNoteResult,
   FluxSaveCaptureDraftPayload,
   FluxSaveRecordingPayload,
+  FluxSaveVideoDigestRequestPayload,
   FluxSaveWorkingListPayload,
   FluxSaveYouTubePayload,
   FluxTranscriptEngine,
+  FluxVideoDigestRequest,
   FluxWorkingList
 } from '../shared/flux-contract.js';
 
@@ -296,6 +298,14 @@ function normalizeYouTubeUrl(value: unknown) {
   }
 
   return parsed.toString();
+}
+
+function normalizeHttpsYouTubeUrl(value: unknown) {
+  const normalized = normalizeYouTubeUrl(value);
+  if (new URL(normalized).protocol !== 'https:') {
+    throw new Error('Video digest requests require an HTTPS YouTube URL.');
+  }
+  return normalized;
 }
 
 function normalizeAnalysis(value: FluxAnalyzedTranscript): FluxAnalyzedTranscript {
@@ -607,6 +617,74 @@ export class FluxCore {
     });
     renameSync(tempPath, captureDraftPath);
     return captureDraft;
+  }
+
+  readVideoDigestRequest(): FluxVideoDigestRequest | null {
+    this.ensureLibrary();
+    const requestPath = this.resolveLibraryPath('.flux', 'video-digest-request.json');
+    if (!existsSync(requestPath)) {
+      return null;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(requestPath, 'utf8')) as unknown;
+    } catch (error) {
+      throw new Error(
+        `Could not read Flux video digest request: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Flux video digest request is invalid.');
+    }
+    const value = parsed as Record<string, unknown>;
+    const url = normalizeHttpsYouTubeUrl(value.url);
+    if (typeof value.requestedAt !== 'string' || !Number.isFinite(Date.parse(value.requestedAt))) {
+      throw new Error('Flux video digest request timestamp is invalid.');
+    }
+
+    let sourceNote: FluxVideoDigestRequest['sourceNote'];
+    if (value.sourceNote !== undefined) {
+      if (!value.sourceNote || typeof value.sourceNote !== 'object' || Array.isArray(value.sourceNote)) {
+        throw new Error('Flux video digest source note is invalid.');
+      }
+      const source = value.sourceNote as Record<string, unknown>;
+      sourceNote = {
+        noteId: normalizeNoteId(source.noteId),
+        folder: sanitizeFolderName(String(source.folder || '')),
+        title: normalizeTitle(source.title, 'Flux video digest source title is invalid.')
+      };
+    }
+
+    return { url, requestedAt: value.requestedAt, ...(sourceNote ? { sourceNote } : {}) };
+  }
+
+  saveVideoDigestRequest({ url, sourceNote }: FluxSaveVideoDigestRequestPayload): FluxVideoDigestRequest {
+    const normalizedUrl = normalizeHttpsYouTubeUrl(url);
+    let storedSource: FluxVideoDigestRequest['sourceNote'];
+    if (sourceNote !== undefined) {
+      const note = this.readNote(sourceNote).note;
+      if (note.source !== 'youtube' || !note.url || normalizeHttpsYouTubeUrl(note.url) !== normalizedUrl) {
+        throw new Error('The selected Flux note does not match that YouTube URL.');
+      }
+      storedSource = { noteId: note.id, folder: note.folder, title: note.title };
+    }
+
+    const request: FluxVideoDigestRequest = {
+      url: normalizedUrl,
+      requestedAt: new Date().toISOString(),
+      ...(storedSource ? { sourceNote: storedSource } : {})
+    };
+    this.ensureLibrary();
+    const requestPath = this.resolveLibraryPath('.flux', 'video-digest-request.json');
+    const tempPath = this.resolveLibraryPath('.flux', `video-digest-request.${randomUUID()}.tmp`);
+    writeFileSync(tempPath, `${JSON.stringify(request, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx'
+    });
+    renameSync(tempPath, requestPath);
+    return request;
   }
 
   private ensureLibrary() {
