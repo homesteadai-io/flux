@@ -410,20 +410,22 @@ export class FluxCore {
     mkdirSync(folderPath, { recursive: true });
 
     const created = new Date();
-    const { noteId, notePath } = this.uniqueMarkdownPath(
+    const note = this.writeUniqueMarkdownNote(
       folderPath,
-      `${formatDateSlug(created)}-${slugify(normalizedTitle)}`
+      `${formatDateSlug(created)}-${slugify(normalizedTitle)}`,
+      (noteId) => {
+        const candidate: FluxNoteSummary = {
+          id: noteId,
+          title: normalizedTitle,
+          source: 'text',
+          created: created.toISOString(),
+          folder: normalizedFolder,
+          transcript: content.trim(),
+          transcriptPreview: previewTranscript(content.trim())
+        };
+        return { note: candidate, markdown: createMarkdownNote(candidate, content) };
+      }
     );
-    const note: FluxNoteSummary = {
-      id: noteId,
-      title: normalizedTitle,
-      source: 'text',
-      created: created.toISOString(),
-      folder: normalizedFolder,
-      transcript: content.trim(),
-      transcriptPreview: previewTranscript(content.trim())
-    };
-    writeFileSync(notePath, createMarkdownNote(note, content), 'utf8');
     return { note, library: this.listLibrary() };
   }
 
@@ -468,21 +470,23 @@ export class FluxCore {
     mkdirSync(folderPath, { recursive: true });
     const created = new Date();
     const title = 'YouTube transcript';
-    const { noteId, notePath } = this.uniqueMarkdownPath(
+    const note = this.writeUniqueMarkdownNote(
       folderPath,
-      `${formatDateSlug(created)}-${slugify(title)}`
+      `${formatDateSlug(created)}-${slugify(title)}`,
+      (noteId) => {
+        const candidate: FluxNoteSummary = {
+          id: noteId,
+          title,
+          source: 'youtube',
+          created: created.toISOString(),
+          folder: transcriptNotesFolder,
+          url,
+          transcript: result.transcript,
+          transcriptPreview: previewTranscript(result.transcript)
+        };
+        return { note: candidate, markdown: createMarkdownNote(candidate, result.transcript) };
+      }
     );
-    const note: FluxNoteSummary = {
-      id: noteId,
-      title,
-      source: 'youtube',
-      created: created.toISOString(),
-      folder: transcriptNotesFolder,
-      url,
-      transcript: result.transcript,
-      transcriptPreview: previewTranscript(result.transcript)
-    };
-    writeFileSync(notePath, createMarkdownNote(note, result.transcript), 'utf8');
     return { note, library: this.listLibrary() };
   }
 
@@ -688,17 +692,27 @@ export class FluxCore {
     return record;
   }
 
-  private uniqueMarkdownPath(folderPath: string, baseNoteId: string) {
-    let noteId = baseNoteId;
-    let notePath = path.join(folderPath, `${noteId}.md`);
-    let suffix = 2;
+  private writeUniqueMarkdownNote(
+    folderPath: string,
+    baseNoteId: string,
+    prepare: (noteId: string) => { note: FluxNoteSummary; markdown: string }
+  ) {
+    let suffix = 1;
 
-    while (existsSync(notePath)) {
-      noteId = `${baseNoteId}-${suffix}`;
-      notePath = path.join(folderPath, `${noteId}.md`);
-      suffix += 1;
+    while (true) {
+      const noteId = suffix === 1 ? baseNoteId : `${baseNoteId}-${suffix}`;
+      const notePath = path.join(folderPath, `${noteId}.md`);
+      const prepared = prepare(noteId);
+      try {
+        writeFileSync(notePath, prepared.markdown, { encoding: 'utf8', flag: 'wx' });
+        return prepared.note;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw error;
+        }
+        suffix += 1;
+      }
     }
-    return { noteId, notePath };
   }
 
   private async getAIProvider(): Promise<FluxAIProvider> {
@@ -731,21 +745,23 @@ export class FluxCore {
   ): FluxNoteMutationResult {
     const { title, ...analysis } = analysisWithTitle;
     const folderPath = this.resolveLibraryPath('Inbox');
-    const { noteId, notePath } = this.uniqueMarkdownPath(
+    const note = this.writeUniqueMarkdownNote(
       folderPath,
-      `${formatDateSlug(created)}-${slugify(title)}`
+      `${formatDateSlug(created)}-${slugify(title)}`,
+      (noteId) => {
+        const candidate: FluxNoteSummary = {
+          id: noteId,
+          title,
+          source: 'voice',
+          created: created.toISOString(),
+          folder: 'Inbox',
+          analysis,
+          transcript,
+          transcriptPreview: previewTranscript(transcript)
+        };
+        return { note: candidate, markdown: createMarkdownNote(candidate, transcript) };
+      }
     );
-    const note: FluxNoteSummary = {
-      id: noteId,
-      title,
-      source: 'voice',
-      created: created.toISOString(),
-      folder: 'Inbox',
-      analysis,
-      transcript,
-      transcriptPreview: previewTranscript(transcript)
-    };
-    writeFileSync(notePath, createMarkdownNote(note, transcript), 'utf8');
     return { note, library: this.listLibrary() };
   }
 

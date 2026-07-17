@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { Worker } from 'node:worker_threads';
 import { fluxWorkingListItemLimit } from '../shared/flux-contract.js';
 import type { FluxCoreOptions } from '../shared/flux-contract.js';
 import { FluxCore } from './flux-core.js';
@@ -74,6 +75,73 @@ test('createTextNote creates unique durable notes and supports folder filters', 
   assert.match(markdown, /source: text/);
   assert.match(markdown, /## Transcript\nFirst line\.\n\nSecond line\./);
   assert.deepEqual(core.listLibrary({ source: 'text', folder: 'Inbox' }).notes.length, 2);
+});
+
+test('concurrent note creators reserve unique files atomically', async (t) => {
+  const { dataDir } = createTestCore(t);
+  const workerCount = 8;
+  const gate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const gateView = new Int32Array(gate);
+  const workerCode = `
+const { parentPort, workerData } = require('node:worker_threads');
+void import('tsx/esm/api').then(({ tsImport }) => tsImport(workerData.moduleUrl, workerData.moduleUrl)).then(({ FluxCore }) => {
+  const view = new Int32Array(workerData.gate);
+  Atomics.add(view, 0, 1);
+  Atomics.notify(view, 0);
+  Atomics.wait(view, 1, 0);
+  const core = new FluxCore({ dataDir: workerData.dataDir });
+  const created = core.createTextNote({
+    title: 'Concurrent note',
+    content: 'Concurrent content',
+    folder: 'Inbox'
+  });
+  parentPort.postMessage(created.note.id);
+});
+`;
+
+  const workers: Worker[] = [];
+  const completions = Array.from(
+    { length: workerCount },
+    () =>
+      new Promise<string>((resolve, reject) => {
+        const worker = new Worker(workerCode, {
+          eval: true,
+          workerData: {
+            dataDir,
+            gate,
+            moduleUrl: new URL('./flux-core.ts', import.meta.url).href
+          }
+        });
+        workers.push(worker);
+        worker.once('message', (noteId: string) => {
+          resolve(noteId);
+          void worker.terminate();
+        });
+        worker.once('error', reject);
+        worker.once('exit', (code) => {
+          if (code !== 0) reject(new Error(`Concurrent note worker exited with ${code}.`));
+        });
+      })
+  );
+
+  const readyDeadline = Date.now() + 5_000;
+  while (Atomics.load(gateView, 0) < workerCount) {
+    if (Date.now() > readyDeadline) {
+      await Promise.all(workers.map((worker) => worker.terminate()));
+      throw new Error('Concurrent note workers did not become ready.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  Atomics.store(gateView, 1, 1);
+  Atomics.notify(gateView, 1, workerCount);
+
+  const noteIds = await Promise.all(completions);
+  assert.equal(new Set(noteIds).size, workerCount);
+  const files = readdirSync(path.join(dataDir, 'Inbox')).filter((file) => file.endsWith('.md'));
+  assert.equal(files.length, workerCount);
+  for (const file of files) {
+    assert.match(readFileSync(path.join(dataDir, 'Inbox', file), 'utf8'), /Concurrent content/);
+  }
 });
 
 test('createFolder and moveNote keep the file and frontmatter in sync', (t) => {
