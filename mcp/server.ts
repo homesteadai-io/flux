@@ -65,6 +65,11 @@ const writeAnnotations = {
   openWorldHint: false,
 } as const;
 
+const youtubeWriteAnnotations = {
+  ...writeAnnotations,
+  openWorldHint: true,
+} as const;
+
 function noteMetadata(note: FluxNoteSummary): FluxNoteMetadata {
   const { transcript: _transcript, ...metadata } = note;
   return metadata;
@@ -178,7 +183,7 @@ export function buildMcpServer(core: FluxMcpCore): McpServer {
       title: 'Fetch a YouTube transcript',
       description: 'Fetch native YouTube captions and save the complete transcript as a Flux note.',
       inputSchema: z.object({ url: youtubeUrl }).strict(),
-      annotations: writeAnnotations,
+      annotations: youtubeWriteAnnotations,
     },
     ({ url }) =>
       safely('YOUTUBE_TRANSCRIPT_FAILED', 'Flux could not fetch that YouTube transcript.', async () => {

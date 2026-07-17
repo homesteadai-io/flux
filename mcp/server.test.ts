@@ -115,6 +115,10 @@ test('registers exactly the six Phase 6 Flux tools', async () => {
         'flux_save_working_list',
       ],
     );
+    const youtubeTool = listed.tools.find((tool) => tool.name === 'flux_fetch_youtube_transcript');
+    const localWriteTool = listed.tools.find((tool) => tool.name === 'flux_create_note');
+    assert.equal(youtubeTool?.annotations?.openWorldHint, true);
+    assert.equal(localWriteTool?.annotations?.openWorldHint, false);
   } finally {
     await connection.close();
   }
