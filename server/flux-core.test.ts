@@ -150,7 +150,7 @@ test('createFolder and moveNote keep the file and frontmatter in sync', (t) => {
 
   const folderResult = core.createFolder('Projects');
   assert.equal(folderResult.folder, 'Projects');
-  const library = core.moveNote(created.note.id, 'Projects');
+  const library = core.moveNote({ noteId: created.note.id, folder: 'Inbox' }, 'Projects');
 
   assert.equal(existsSync(path.join(dataDir, 'Inbox', `${created.note.id}.md`)), false);
   const targetPath = path.join(dataDir, 'Projects', `${created.note.id}.md`);
@@ -159,6 +159,31 @@ test('createFolder and moveNote keep the file and frontmatter in sync', (t) => {
   assert.equal(library.notes.find((note) => note.id === created.note.id)?.folder, 'Projects');
 });
 
+test('moveNote uses the source folder when note identifiers match', (t) => {
+  const { core, dataDir } = createTestCore(t);
+  const inbox = core.createTextNote({
+    title: 'Duplicate title',
+    content: 'Inbox copy.',
+    folder: 'Inbox'
+  });
+  const archive = core.createTextNote({
+    title: 'Duplicate title',
+    content: 'Archive copy.',
+    folder: 'Archive'
+  });
+
+  assert.equal(archive.note.id, inbox.note.id);
+  core.moveNote({ noteId: archive.note.id, folder: 'Archive' }, 'Projects');
+
+  const inboxPath = path.join(dataDir, 'Inbox', `${inbox.note.id}.md`);
+  const archivePath = path.join(dataDir, 'Archive', `${archive.note.id}.md`);
+  const projectPath = path.join(dataDir, 'Projects', `${archive.note.id}.md`);
+  assert.equal(existsSync(inboxPath), true);
+  assert.equal(existsSync(archivePath), false);
+  assert.equal(existsSync(projectPath), true);
+  assert.match(readFileSync(inboxPath, 'utf8'), /Inbox copy/);
+  assert.match(readFileSync(projectPath, 'utf8'), /Archive copy/);
+});
 test('working list has one persistent JSON-backed value per data directory', (t) => {
   const { core, dataDir } = createTestCore(t);
   assert.deepEqual(core.readWorkingList(), { title: 'Flux list', items: [] });
@@ -220,7 +245,10 @@ test('public note operations reject path traversal and do not create outside fil
     () => core.readNote({ noteId: '../outside', folder: 'Inbox' }),
     /must not contain a path/
   );
-  assert.throws(() => core.moveNote('..\\outside', 'Inbox'), /must not contain a path/);
+  assert.throws(
+    () => core.moveNote({ noteId: '..\\outside', folder: 'Inbox' }, 'Projects'),
+    /must not contain a path/
+  );
   assert.equal(existsSync(outsidePath), false);
 });
 

@@ -73,7 +73,7 @@ interface FluxScreenshot {
 interface FluxLibraryApi {
   list: () => Promise<FluxLibrarySnapshot>;
   createFolder: (name: string) => Promise<{ folder: string; library: FluxLibrarySnapshot }>;
-  moveNote: (noteId: string, targetFolder: string) => Promise<FluxLibrarySnapshot>;
+  moveNote: (noteId: string, folder: string, targetFolder: string) => Promise<FluxLibrarySnapshot>;
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) => Promise<FluxCaptureResult>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<FluxCaptureResult>;
   saveEnvLocal: (payload: { content: string }) => Promise<FluxSaveEnvResult>;

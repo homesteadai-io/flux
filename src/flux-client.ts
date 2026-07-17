@@ -64,10 +64,10 @@ const browserLibrary: FluxLibraryApi = {
   list: () => requestJson('/library'),
   createFolder: (name) =>
     requestJson('/folders', { method: 'POST', body: JSON.stringify({ name }) }),
-  moveNote: (noteId, targetFolder) =>
+  moveNote: (noteId, folder, targetFolder) =>
     requestJson('/notes/move', {
       method: 'POST',
-      body: JSON.stringify({ noteId, targetFolder })
+      body: JSON.stringify({ noteId, folder, targetFolder })
     }),
   saveRecording: ({ audioData, mimeType }) =>
     requestJson('/recordings', {

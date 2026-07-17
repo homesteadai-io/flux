@@ -497,14 +497,17 @@ export class FluxCore {
     return { folder, library: this.listLibrary() };
   }
 
-  moveNote(noteId: string, targetFolder: string): FluxLibrarySnapshot {
+  moveNote({ noteId, folder: currentFolder }: FluxNoteLocator, targetFolder: string): FluxLibrarySnapshot {
     const normalizedNoteId = normalizeNoteId(noteId);
+    const normalizedCurrentFolder = sanitizeFolderName(currentFolder);
     const folder = sanitizeFolderName(targetFolder);
     const dataDir = this.ensureLibrary();
     const targetDir = this.resolveLibraryPath(folder);
     mkdirSync(targetDir, { recursive: true });
 
-    const current = this.listNoteRecords(dataDir).find((note) => note.id === normalizedNoteId);
+    const current = this.listNoteRecords(dataDir).find(
+      (note) => note.id === normalizedNoteId && note.folder === normalizedCurrentFolder
+    );
     if (!current) {
       throw new Error(`Could not find note ${normalizedNoteId}.`);
     }

@@ -23,6 +23,7 @@ const textNote = {
   folder: 'Inbox',
   transcript: 'Full private note body',
   transcriptPreview: 'Full private note body',
+  analysis: { model: 'private-model', topline: 'Private summary', nextSteps: ['Private next step'] },
 };
 
 const youtubeNote = {
@@ -34,6 +35,7 @@ const youtubeNote = {
   url: 'https://www.youtube.com/watch?v=abc123',
   transcript: 'Complete native captions',
   transcriptPreview: 'Complete native captions',
+  analysis: { model: 'private-model', topline: 'Private video summary', nextSteps: [] },
 };
 
 class FakeFluxCore implements FluxMcpCore {
@@ -138,13 +140,21 @@ test('routes all six tools and returns bounded structured payloads', async () =>
       (listedPayload.notes as Array<{ id: string }>).map((note) => note.id),
       ['note-2'],
     );
-    assert.equal('transcript' in (listedPayload.notes as Array<Record<string, unknown>>)[0], false);
+    const listedNote = (listedPayload.notes as Array<Record<string, unknown>>)[0];
+    assert.equal('transcript' in listedNote, false);
+    assert.equal('transcriptPreview' in listedNote, false);
+    assert.equal('analysis' in listedNote, false);
 
     const read = await connection.client.callTool({
       name: 'flux_read_note',
       arguments: { noteId: 'note-1', folder: 'Inbox' },
     });
-    assert.equal(structured(read).markdown, '# First note\n\nFull private note body');
+    const readPayload = structured(read);
+    assert.equal(readPayload.markdown, '# First note\n\nFull private note body');
+    const readMetadata = readPayload.note as Record<string, unknown>;
+    assert.equal('transcript' in readMetadata, false);
+    assert.equal('transcriptPreview' in readMetadata, false);
+    assert.equal('analysis' in readMetadata, false);
 
     await connection.client.callTool({
       name: 'flux_create_note',

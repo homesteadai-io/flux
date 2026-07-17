@@ -1277,9 +1277,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'library:move-note',
-    (event, payload: { noteId: string; targetFolder: string }) => {
+    (event, payload: { noteId: string; folder: string; targetFolder: string }) => {
       assertTrustedSender(event);
-      return fluxCore.moveNote(payload.noteId, payload.targetFolder);
+      return fluxCore.moveNote({ noteId: payload.noteId, folder: payload.folder }, payload.targetFolder);
     }
   );
 

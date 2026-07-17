@@ -14,7 +14,7 @@ type FluxHttpCore = {
   saveRecording: (payload: { audioData: Uint8Array; mimeType: string }) => Promise<unknown>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<unknown>;
   createFolder: (name: string) => unknown;
-  moveNote: (noteId: string, targetFolder: string) => unknown;
+  moveNote: (locator: { noteId: string; folder: string }, targetFolder: string) => unknown;
   readWorkingList: () => unknown;
   saveWorkingList: (payload: { title: string; items: string[] }) => unknown;
   readCaptureDraft?: () => unknown;
@@ -219,7 +219,10 @@ async function handleApi(
       response,
       200,
       await core.moveNote(
-        requireString(body.noteId, 'noteId', 160),
+        {
+          noteId: requireString(body.noteId, 'noteId', 160),
+          folder: requireString(body.folder, 'folder', 64)
+        },
         requireString(body.targetFolder, 'targetFolder', 64)
       )
     );

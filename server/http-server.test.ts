@@ -16,7 +16,7 @@ function makeCore() {
     saveRecording: async (payload: unknown) => ({ payload }),
     saveYouTubeUrl: async (payload: unknown) => ({ payload }),
     createFolder: (name: string) => ({ folder: name }),
-    moveNote: (noteId: string, targetFolder: string) => ({ noteId, targetFolder }),
+    moveNote: (locator: { noteId: string; folder: string }, targetFolder: string) => ({ locator, targetFolder }),
     readWorkingList: () => workingList,
     saveWorkingList: (payload: { title: string; items: string[] }) => ({ ...payload })
   };
@@ -122,6 +122,16 @@ test('rejects simple content types and accepts same-origin JSON mutations', asyn
     });
     assert.equal(sameOrigin.status, 201);
     assert.deepEqual(await sameOrigin.json(), { folder: 'Browser folder' });
+    const moved = await fetch(`${host.url}/api/notes/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noteId: 'same-id', folder: 'Archive', targetFolder: 'Projects' })
+    });
+    assert.equal(moved.status, 200);
+    assert.deepEqual(await moved.json(), {
+      locator: { noteId: 'same-id', folder: 'Archive' },
+      targetFolder: 'Projects'
+    });
   } finally {
     await host.close();
   }

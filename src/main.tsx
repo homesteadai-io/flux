@@ -1678,7 +1678,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      const snapshot = await requireFluxLibrary().moveNote(selectedNote.id, targetFolder);
+      const snapshot = await requireFluxLibrary().moveNote(selectedNote.id, selectedNote.folder, targetFolder);
       setLibrary(snapshot);
       setSelectedFolder(targetFolder.trim());
       setSelectedNoteId(selectedNote.id);

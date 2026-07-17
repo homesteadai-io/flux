@@ -24,7 +24,7 @@ export type FluxMcpCore = Pick<
   | 'saveWorkingList'
 >;
 
-type FluxNoteMetadata = Omit<FluxNoteSummary, 'transcript'>;
+type FluxNoteMetadata = Omit<FluxNoteSummary, 'transcript' | 'transcriptPreview' | 'analysis'>;
 
 const SOURCE_VALUES = ['text', 'voice', 'youtube'] as const satisfies readonly FluxNoteSource[];
 const MAX_TITLE_LENGTH = 240;
@@ -71,7 +71,12 @@ const youtubeWriteAnnotations = {
 } as const;
 
 function noteMetadata(note: FluxNoteSummary): FluxNoteMetadata {
-  const { transcript: _transcript, ...metadata } = note;
+  const {
+    transcript: _transcript,
+    transcriptPreview: _transcriptPreview,
+    analysis: _analysis,
+    ...metadata
+  } = note;
   return metadata;
 }
 
