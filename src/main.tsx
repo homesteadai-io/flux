@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { tokens } from './tokens';
+import { getFluxLibrary, isFluxDesktop } from './flux-client';
+import { handoffForVisibleNote } from './video-handoff';
 import './theme.css';
 import './styles.css';
 
@@ -37,10 +39,7 @@ const fallbackLibrary: FluxLibrarySnapshot = {
 };
 
 function requireFluxLibrary() {
-  if (!window.fluxLibrary) {
-    throw new Error('Flux desktop bridge is not available in browser preview.');
-  }
-  return window.fluxLibrary;
+  return getFluxLibrary();
 }
 
 function IconMic({ size = 26 }: IconProps) {
@@ -161,6 +160,10 @@ function IconWave({ size = 24 }: IconProps) {
 }
 
 function WindowControls() {
+  if (!window.fluxWindow) {
+    return <span className="window-controls" aria-hidden="true" />;
+  }
+
   return (
     <div className="window-controls">
       <button type="button" aria-label="Minimize" onClick={() => window.fluxWindow?.minimize()}>
@@ -690,8 +693,11 @@ function CaptureCard({
   | 'onExportMarkdown'
 >) {
   const [scratchValue, setScratchValue] = useState('');
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
-  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const [captureDraftReady, setCaptureDraftReady] = useState(false);
+  const [captureDraftSaveFailed, setCaptureDraftSaveFailed] = useState(false);
+  const captureDraftEdited = useRef(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
   const [clearedCaptureKey, setClearedCaptureKey] = useState('');
   const captureKey = captureNote ? `${captureNote.folder}/${captureNote.id}` : '';
   const activeCaptureNote = clearedCaptureKey === captureKey ? null : captureNote;
@@ -708,6 +714,43 @@ function CaptureCard({
   const captureText = scratchValue.trim() || activeCaptureNote?.transcript?.trim() || '';
   const captureTitle = activeCaptureNote?.title || 'Flux capture';
   const captureMarkdown = `# ${captureTitle}\n\n## Capture\n${captureText}\n`;
+
+  useEffect(() => {
+    let active = true;
+    void requireFluxLibrary()
+      .readCaptureDraft()
+      .then((draft) => {
+        if (active) {
+          setScratchValue(draft.text);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setCaptureDraftSaveFailed(true);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setCaptureDraftReady(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!captureDraftReady || !captureDraftEdited.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void requireFluxLibrary()
+        .saveCaptureDraft({ text: scratchValue })
+        .then(() => setCaptureDraftSaveFailed(false))
+        .catch(() => setCaptureDraftSaveFailed(true));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [scratchValue, captureDraftReady]);
 
   useEffect(() => {
     setCopyStatus('idle');
@@ -727,7 +770,7 @@ function CaptureCard({
       });
       setCopyStatus('copied');
     } catch {
-      setCopyStatus('idle');
+      setCopyStatus('failed');
     }
   };
 
@@ -743,11 +786,12 @@ function CaptureCard({
       });
       setExportStatus('exported');
     } catch {
-      setExportStatus('idle');
+      setExportStatus('failed');
     }
   };
 
   const clearCapture = () => {
+    captureDraftEdited.current = true;
     setScratchValue('');
     if (captureKey) {
       setClearedCaptureKey(captureKey);
@@ -776,27 +820,45 @@ function CaptureCard({
         <span>Capture</span>
         <textarea
           value={scratchValue}
-          onChange={(event) => setScratchValue(event.target.value)}
+          onChange={(event) => {
+            captureDraftEdited.current = true;
+            setScratchValue(event.target.value);
+          }}
           placeholder={preview}
           rows={8}
-          disabled={isBusy && captureStatus !== 'recording'}
+          disabled={!captureDraftReady || (isBusy && captureStatus !== 'recording')}
         />
       </label>
 
       <div className="capture-status-row">
-        <span className={captureStatus === 'error' ? 'live-dot is-error' : 'live-dot'} />
-        <span>{statusCopy(captureStatus)}</span>
+        <span className={captureStatus === 'error' || captureDraftSaveFailed ? 'live-dot is-error' : 'live-dot'} />
+        <span>{captureDraftSaveFailed ? 'Draft not saved' : statusCopy(captureStatus)}</span>
         <time>{formatClock(elapsedSeconds)}</time>
       </div>
 
       <div className="card-actions">
         <GlassButton onClick={copyMarkdown} disabled={!captureText || copyStatus === 'copying'}>
-          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
+          {copyStatus === 'copying'
+            ? 'Copying...'
+            : copyStatus === 'copied'
+              ? 'Copied'
+              : copyStatus === 'failed'
+                ? 'Copy failed'
+                : 'Copy .md'}
         </GlassButton>
         <GlassButton onClick={exportMarkdown} disabled={!captureText || exportStatus === 'exporting'}>
-          {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export notes'}
+          {exportStatus === 'exporting'
+            ? 'Exporting...'
+            : exportStatus === 'exported'
+              ? 'Exported'
+              : exportStatus === 'failed'
+                ? 'Export failed'
+                : 'Export notes'}
         </GlassButton>
-        <GlassButton onClick={clearCapture} disabled={!scratchValue.trim() && !activeCaptureNote}>
+        <GlassButton
+          onClick={clearCapture}
+          disabled={!captureDraftReady || (!scratchValue.trim() && !activeCaptureNote)}
+        >
           Clear
         </GlassButton>
       </div>
@@ -815,20 +877,53 @@ function YouTubeCard({
   'youtubeNote' | 'captureStatus' | 'onSubmitYouTube' | 'onCopyMarkdown' | 'onExportMarkdown'
 >) {
   const [url, setUrl] = useState('');
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
-  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
+  const [handoffAction, setHandoffAction] = useState<'idle' | 'queueing' | 'failed'>('idle');
+  const [taskTarget, setTaskTarget] = useState<FluxCodexTaskReference | null>(null);
+  const [taskTargetReady, setTaskTargetReady] = useState(false);
+  const [handoff, setHandoff] = useState<FluxVideoHandoff | null>(null);
   const [clearedTranscriptKey, setClearedTranscriptKey] = useState('');
   const transcriptKey = youtubeNote ? `${youtubeNote.folder}/${youtubeNote.id}` : '';
   const activeYoutubeNote = clearedTranscriptKey === transcriptKey ? null : youtubeNote;
   const isBusy = captureStatus === 'importing' || captureStatus === 'saving' || captureStatus === 'recording';
   const transcript = activeYoutubeNote?.transcript || activeYoutubeNote?.transcriptPreview || '';
   const youtubeMarkdown = `# YouTube transcript\n\n## Transcript\n${transcript.trim()}\n`;
+  const visibleHandoff = handoffForVisibleNote(handoff, activeYoutubeNote);
+  const handoffPending = ['generated', 'queued', 'claimed'].includes(visibleHandoff?.state || '');
 
   useEffect(() => {
     setCopyStatus('idle');
     setExportStatus('idle');
+    setHandoffAction('idle');
     setClearedTranscriptKey('');
   }, [youtubeNote?.id, youtubeNote?.folder]);
+
+  useEffect(() => {
+    let canceled = false;
+    const refreshHandoff = async () => {
+      try {
+        const library = requireFluxLibrary();
+        const target = await library.readCodexTaskTarget();
+        const latest = target ? await library.readLatestVideoHandoff(target.taskId) : null;
+        if (!canceled) {
+          setTaskTarget(target);
+          setTaskTargetReady(true);
+          setHandoff(latest);
+        }
+      } catch {
+        if (!canceled) {
+          setTaskTargetReady(true);
+        }
+      }
+    };
+    void refreshHandoff();
+    const interval = window.setInterval(() => void refreshHandoff(), 1_500);
+    return () => {
+      canceled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const submitUrl = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -852,7 +947,7 @@ function YouTubeCard({
       });
       setCopyStatus('copied');
     } catch {
-      setCopyStatus('idle');
+      setCopyStatus('failed');
     }
   };
 
@@ -865,7 +960,24 @@ function YouTubeCard({
       const exported = await onExportMarkdown(activeYoutubeNote);
       setExportStatus(exported ? 'exported' : 'idle');
     } catch {
-      setExportStatus('idle');
+      setExportStatus('failed');
+    }
+  };
+
+  const queueHandoff = async () => {
+    if (!activeYoutubeNote || !taskTarget || handoffAction === 'queueing' || handoffPending || isBusy) {
+      return;
+    }
+    setHandoffAction('queueing');
+    try {
+      const created = await requireFluxLibrary().createVideoHandoff({
+        expectedTaskId: taskTarget.taskId,
+        sourceNote: { noteId: activeYoutubeNote.id, folder: activeYoutubeNote.folder }
+      });
+      setHandoff(created);
+      setHandoffAction('idle');
+    } catch {
+      setHandoffAction('failed');
     }
   };
 
@@ -876,21 +988,61 @@ function YouTubeCard({
     }
     setCopyStatus('idle');
     setExportStatus('idle');
+    setHandoffAction('idle');
   };
+
+  const taskLabel = taskTarget?.taskName || taskTarget?.taskId || 'Not connected';
+  const handoffStatusText = !taskTargetReady
+    ? 'Checking the Codex task connection.'
+    : !taskTarget
+      ? 'Not connected. In this Codex task, say: Connect Flux to this task.'
+      : handoffAction === 'failed'
+        ? 'Flux could not create the handoff. Nothing was queued.'
+        : !visibleHandoff
+          ? 'Connected. Generate a transcript, then queue it for this Codex task.'
+          : visibleHandoff.state === 'queued'
+            ? 'Queued. This does not wake Codex. Message this Codex task: Digest the queued Flux video.'
+            : visibleHandoff.state === 'claimed'
+              ? 'Claimed by this Codex task. The raw transcript remains unchanged.'
+              : visibleHandoff.state === 'analysis_ready'
+                ? 'Analysis ready. The raw transcript remains available above.'
+                : visibleHandoff.state === 'failed'
+                  ? 'Analysis failed. The raw transcript remains available above.'
+                  : 'The handoff record was generated and is being queued.';
+  const queueButtonLabel = handoffAction === 'queueing'
+    ? 'Queuing...'
+    : visibleHandoff?.state === 'queued'
+      ? 'Queued for this Codex task'
+      : visibleHandoff?.state === 'claimed'
+        ? 'Claimed by this Codex task'
+        : 'Queue for this Codex task';
 
   return (
     <section className="glass-pane workbench-card youtube-card" aria-label="YouTube analysis">
       <WorkbenchHeader />
-      <div className="analysis-box transcript-box">
-        <span>Transcript: YouTube</span>
-        <pre>{transcript || 'Paste a YouTube URL and Flux will pull every captioned word into this box.'}</pre>
-      </div>
+      <section className="source-metadata" aria-label="Source metadata">
+        <span>Source</span>
+        <strong>{activeYoutubeNote?.url || 'No YouTube source generated'}</strong>
+        <time dateTime={activeYoutubeNote?.created || ''}>
+          {activeYoutubeNote ? new Date(activeYoutubeNote.created).toLocaleString() : 'No capture timestamp'}
+        </time>
+      </section>
+
+      <section className="analysis-box transcript-box" aria-label="Transcript">
+        <span>Transcript</span>
+        <pre aria-label="YouTube transcript">
+          {transcript || 'Paste a YouTube URL and Flux will pull every captioned word into this box.'}
+        </pre>
+      </section>
 
       <form className="inline-paste-box" onSubmit={submitUrl}>
         <IconLink />
         <textarea
           value={url}
-          onChange={(event) => setUrl(event.target.value)}
+          onChange={(event) => {
+            setUrl(event.target.value);
+            setHandoffAction('idle');
+          }}
           placeholder="Paste URL: YouTube"
           aria-label="Paste YouTube URL"
           rows={2}
@@ -904,14 +1056,56 @@ function YouTubeCard({
         >
           Generate
         </button>
+        <button
+          type="button"
+          className="digest-button"
+          disabled={!activeYoutubeNote || !taskTarget || isBusy || handoffAction === 'queueing' || handoffPending}
+          aria-label="Queue for this Codex task"
+          onClick={queueHandoff}
+        >
+          {queueButtonLabel}
+        </button>
       </form>
+
+      <section className="handoff-status" aria-label="Handoff status" role="status" aria-live="polite">
+        <div>
+          <span>Codex task</span>
+          <strong>{taskLabel}</strong>
+        </div>
+        <div>
+          <span>Handoff</span>
+          <strong>{visibleHandoff?.handoffId || 'None'}</strong>
+        </div>
+        <div>
+          <span>State</span>
+          <strong>{visibleHandoff?.state || 'none'}</strong>
+        </div>
+        <p>{handoffStatusText}</p>
+      </section>
+
+      <section className="analysis-result" aria-label="Analysis result">
+        <span>Analysis result</span>
+        <pre>{visibleHandoff?.analysisResult || visibleHandoff?.failureMessage || 'No Codex analysis yet.'}</pre>
+      </section>
 
       <div className="card-actions">
         <GlassButton onClick={copyMarkdown} disabled={!transcript.trim() || copyStatus === 'copying'}>
-          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
+          {copyStatus === 'copying'
+            ? 'Copying...'
+            : copyStatus === 'copied'
+              ? 'Copied'
+              : copyStatus === 'failed'
+                ? 'Copy failed'
+                : 'Copy .md'}
         </GlassButton>
         <GlassButton onClick={exportMarkdown} disabled={!activeYoutubeNote || exportStatus === 'exporting'}>
-          {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export to folder'}
+          {exportStatus === 'exporting'
+            ? 'Exporting...'
+            : exportStatus === 'exported'
+              ? 'Exported'
+              : exportStatus === 'failed'
+                ? 'Export failed'
+                : 'Export to folder'}
         </GlassButton>
         <GlassButton onClick={clearTranscript} disabled={!url.trim() && !activeYoutubeNote}>
           Clear
@@ -927,13 +1121,22 @@ function ScreenshotTrayCard() {
   const [status, setStatus] = useState<'idle' | 'capturing' | 'copying' | 'copied' | 'saving' | 'saved'>('idle');
   const selectedScreenshot =
     screenshots.find((screenshot) => screenshot.filePath === selectedPath) ?? screenshots[0] ?? null;
+  const selectedScope = selectedScreenshot?.scope === 'uploaded_image'
+    ? 'Uploaded image'
+    : selectedScreenshot?.scope === 'flux_page_capture'
+      ? 'Flux-page capture'
+      : selectedScreenshot
+        ? 'Desktop capture'
+        : 'No capture scope';
+  const desktopCapture = isFluxDesktop();
+  const desktopLibrary = window.fluxLibrary;
 
   useEffect(() => {
-    if (!window.fluxLibrary?.listScreenshots) {
+    if (!desktopLibrary?.listScreenshots) {
       return;
     }
 
-    void window.fluxLibrary
+    void desktopLibrary
       .listScreenshots()
       .then((nextScreenshots) => {
         setScreenshots(nextScreenshots);
@@ -1017,13 +1220,16 @@ function ScreenshotTrayCard() {
     <section className="glass-pane workbench-card screenshot-card" aria-label="Screenshot tray">
       <WorkbenchHeader />
       <div className="card-topline">
-        <span className="tray-status">{selectedScreenshot ? selectedScreenshot.fileName : 'No screenshot selected'}</span>
+        <span className="tray-status">
+          {selectedScreenshot ? `${selectedScope}: ${selectedScreenshot.fileName}` : selectedScope}
+        </span>
         <button
           type="button"
           className="mini-mic screen-capture-button"
-          aria-label="Capture screenshot"
+          aria-label="Desktop capture"
           onClick={capture}
-          disabled={status === 'capturing'}
+          disabled={!desktopCapture || status === 'capturing'}
+          title={desktopCapture ? 'Desktop capture' : 'Browser Flux does not capture the desktop'}
         >
           <IconFile />
         </button>
@@ -1045,7 +1251,13 @@ function ScreenshotTrayCard() {
               </button>
             ))
           ) : (
-            <p>{status === 'capturing' ? 'Capturing...' : 'No screenshots yet.'}</p>
+            <p>
+              {!desktopCapture
+                ? 'Browser Flux does not capture the desktop.'
+                : status === 'capturing'
+                  ? 'Capturing...'
+                  : 'No screenshots yet.'}
+            </p>
           )}
         </div>
       </div>
@@ -1057,7 +1269,9 @@ function ScreenshotTrayCard() {
         <GlassButton onClick={saveImage} disabled={!selectedScreenshot || status === 'saving'}>
           {status === 'saving' ? 'Saving...' : status === 'saved' ? 'Saved' : 'Save image'}
         </GlassButton>
-        <GlassButton onClick={openFolder}>Open folder</GlassButton>
+        <GlassButton onClick={openFolder} disabled={!desktopCapture}>
+          Open folder
+        </GlassButton>
         <GlassButton onClick={deleteImage} disabled={!selectedScreenshot}>
           Delete
         </GlassButton>
@@ -1069,11 +1283,52 @@ function ScreenshotTrayCard() {
 function ListCard() {
   const [title, setTitle] = useState('Working list');
   const [draftItem, setDraftItem] = useState('');
-  const [items, setItems] = useState<string[]>(['Review Flux layout', 'Keep transcript in YouTube box']);
+  const [items, setItems] = useState<string[]>([]);
+  const [workingListReady, setWorkingListReady] = useState(false);
+  const [workingListSaveFailed, setWorkingListSaveFailed] = useState(false);
+  const workingListEdited = useRef(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
-  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported'>('idle');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
   const hasListContent = Boolean(title.trim() || items.length);
+
+  useEffect(() => {
+    let active = true;
+    void requireFluxLibrary()
+      .readWorkingList()
+      .then((workingList) => {
+        if (active) {
+          setTitle(workingList.title);
+          setItems(workingList.items);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setWorkingListSaveFailed(true);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setWorkingListReady(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!workingListReady || !workingListEdited.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void requireFluxLibrary()
+        .saveWorkingList({ title: title.trim() || 'Working list', items })
+        .then(() => setWorkingListSaveFailed(false))
+        .catch(() => setWorkingListSaveFailed(true));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [title, items, workingListReady]);
 
   useEffect(() => {
     setCopyStatus('idle');
@@ -1089,18 +1344,20 @@ function ListCard() {
   const addItem = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextItem = draftItem.trim();
-    if (!nextItem) {
+    if (!workingListReady || !nextItem) {
       return;
     }
+    workingListEdited.current = true;
     setItems((current) => [...current, nextItem]);
     setSelectedIndex(items.length);
     setDraftItem('');
   };
 
   const removeSelectedItem = () => {
-    if (selectedIndex === null) {
+    if (!workingListReady || selectedIndex === null) {
       return;
     }
+    workingListEdited.current = true;
     setItems((current) => current.filter((_, index) => index !== selectedIndex));
     setSelectedIndex(null);
   };
@@ -1117,7 +1374,7 @@ function ListCard() {
       });
       setCopyStatus('copied');
     } catch {
-      setCopyStatus('idle');
+      setCopyStatus('failed');
     }
   };
 
@@ -1133,11 +1390,12 @@ function ListCard() {
       });
       setExportStatus('exported');
     } catch {
-      setExportStatus('idle');
+      setExportStatus('failed');
     }
   };
 
   const clearList = () => {
+    workingListEdited.current = true;
     setTitle('');
     setDraftItem('');
     setItems([]);
@@ -1153,9 +1411,13 @@ function ListCard() {
         <input
           className="list-title-input"
           value={title}
-          onChange={(event) => setTitle(event.target.value)}
+          onChange={(event) => {
+            workingListEdited.current = true;
+            setTitle(event.target.value);
+          }}
           placeholder="List title"
           aria-label="List title"
+          disabled={!workingListReady}
         />
         <form className="list-add-row" onSubmit={addItem}>
           <input
@@ -1163,14 +1425,18 @@ function ListCard() {
             onChange={(event) => setDraftItem(event.target.value)}
             placeholder="Add item"
             aria-label="Add list item"
+            disabled={!workingListReady}
           />
-          <button type="submit" disabled={!draftItem.trim()}>
+          <button type="submit" disabled={!workingListReady || !draftItem.trim()}>
             <IconPlus />
           </button>
         </form>
+        <span className="shared-save-status" role="status">
+          {workingListSaveFailed ? 'List not saved' : ''}
+        </span>
         <div
           className="note-list"
-          tabIndex={0}
+          tabIndex={workingListReady ? 0 : -1}
           onKeyDown={(event) => {
             if (event.key === 'Delete' || event.key === 'Backspace') {
               event.preventDefault();
@@ -1185,6 +1451,7 @@ function ListCard() {
                 type="button"
                 className={selectedIndex === index ? 'is-selected' : ''}
                 onClick={() => setSelectedIndex(index)}
+                disabled={!workingListReady}
               >
                 <i />
                 <span>{item}</span>
@@ -1198,12 +1465,27 @@ function ListCard() {
 
       <div className="card-actions">
         <GlassButton onClick={copyMarkdown} disabled={!hasListContent || copyStatus === 'copying'}>
-          {copyStatus === 'copying' ? 'Copying...' : copyStatus === 'copied' ? 'Copied' : 'Copy .md'}
+          {copyStatus === 'copying'
+            ? 'Copying...'
+            : copyStatus === 'copied'
+              ? 'Copied'
+              : copyStatus === 'failed'
+                ? 'Copy failed'
+                : 'Copy .md'}
         </GlassButton>
         <GlassButton onClick={exportMarkdown} disabled={!hasListContent || exportStatus === 'exporting'}>
-          {exportStatus === 'exporting' ? 'Exporting...' : exportStatus === 'exported' ? 'Exported' : 'Export to folder'}
+          {exportStatus === 'exporting'
+            ? 'Exporting...'
+            : exportStatus === 'exported'
+              ? 'Exported'
+              : exportStatus === 'failed'
+                ? 'Export failed'
+                : 'Export to folder'}
         </GlassButton>
-        <GlassButton onClick={clearList} disabled={!hasListContent && !draftItem.trim()}>
+        <GlassButton
+          onClick={clearList}
+          disabled={!workingListReady || (!hasListContent && !draftItem.trim())}
+        >
           Clear
         </GlassButton>
       </div>
@@ -1312,12 +1594,7 @@ function App() {
   );
 
   const refreshLibrary = useCallback(async () => {
-    if (!window.fluxLibrary) {
-      setLibrary(fallbackLibrary);
-      return;
-    }
-
-    const snapshot = await window.fluxLibrary.list();
+    const snapshot = await requireFluxLibrary().list();
     setLibrary(snapshot);
     if (!snapshot.folders.some((folder) => folder.name === selectedFolder)) {
       setSelectedFolder('Inbox');
@@ -1531,7 +1808,7 @@ function App() {
     try {
       setErrorMessage(null);
       setEnvStatusMessage(null);
-      const snapshot = await requireFluxLibrary().moveNote(selectedNote.id, targetFolder);
+      const snapshot = await requireFluxLibrary().moveNote(selectedNote.id, selectedNote.folder, targetFolder);
       setLibrary(snapshot);
       setSelectedFolder(targetFolder.trim());
       setSelectedNoteId(selectedNote.id);

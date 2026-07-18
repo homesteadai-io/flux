@@ -19,7 +19,7 @@ interface FluxAnalysis {
 interface FluxNoteSummary {
   id: string;
   title: string;
-  source: 'voice' | 'youtube';
+  source: 'text' | 'voice' | 'youtube';
   created: string;
   folder: string;
   url?: string;
@@ -36,6 +36,31 @@ interface FluxLibrarySnapshot {
 interface FluxCaptureResult {
   note: FluxNoteSummary;
   library: FluxLibrarySnapshot;
+}
+
+interface FluxCodexTaskReference {
+  taskId: string;
+  taskName?: string;
+  boundAt: string;
+}
+
+type FluxVideoHandoffState = 'generated' | 'queued' | 'claimed' | 'analysis_ready' | 'failed';
+
+interface FluxVideoHandoff {
+  handoffId: string;
+  sourceUrl: string;
+  capturedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  queuedAt?: string;
+  claimedAt?: string;
+  completedAt?: string;
+  state: FluxVideoHandoffState;
+  rawTranscript: string;
+  sourceNote: { noteId: string; folder: string; title: string };
+  targetTask: FluxCodexTaskReference;
+  analysisResult?: string;
+  failureMessage?: string;
 }
 
 type FluxSaveEnvResult =
@@ -65,6 +90,7 @@ interface FluxScreenshot {
   filePath: string;
   fileName: string;
   created: string;
+  scope: 'desktop_capture' | 'flux_page_capture' | 'uploaded_image';
   dataUrl: string;
   width: number;
   height: number;
@@ -73,9 +99,15 @@ interface FluxScreenshot {
 interface FluxLibraryApi {
   list: () => Promise<FluxLibrarySnapshot>;
   createFolder: (name: string) => Promise<{ folder: string; library: FluxLibrarySnapshot }>;
-  moveNote: (noteId: string, targetFolder: string) => Promise<FluxLibrarySnapshot>;
+  moveNote: (noteId: string, folder: string, targetFolder: string) => Promise<FluxLibrarySnapshot>;
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) => Promise<FluxCaptureResult>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<FluxCaptureResult>;
+  readCodexTaskTarget: () => Promise<FluxCodexTaskReference | null>;
+  readLatestVideoHandoff: (taskId: string) => Promise<FluxVideoHandoff | null>;
+  createVideoHandoff: (payload: {
+    expectedTaskId: string;
+    sourceNote: { noteId: string; folder: string };
+  }) => Promise<FluxVideoHandoff>;
   saveEnvLocal: (payload: { content: string }) => Promise<FluxSaveEnvResult>;
   copyMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxCopyMarkdownResult>;
   exportMarkdown: (payload: { noteId: string; folder: string }) => Promise<FluxExportMarkdownResult>;
@@ -89,9 +121,13 @@ interface FluxLibraryApi {
   saveScreenshot: (payload: { filePath: string }) => Promise<FluxExportMarkdownResult>;
   deleteScreenshot: (payload: { filePath: string }) => Promise<FluxScreenshot[]>;
   openScreenshotsFolder: () => Promise<{ directory: string }>;
+  readWorkingList: () => Promise<{ title: string; items: string[] }>;
+  saveWorkingList: (payload: { title: string; items: string[] }) => Promise<{ title: string; items: string[] }>;
+  readCaptureDraft: () => Promise<{ text: string }>;
+  saveCaptureDraft: (payload: { text: string }) => Promise<{ text: string }>;
 }
 
 interface Window {
-  fluxWindow: FluxWindowApi;
-  fluxLibrary: FluxLibraryApi;
+  fluxWindow?: FluxWindowApi;
+  fluxLibrary?: FluxLibraryApi;
 }

@@ -1,0 +1,82 @@
+{
+  "manifest_version": "0.4",
+  "name": "flux",
+  "display_name": "Flux",
+  "version": "1.2.0",
+  "description": "Bounded local access to Flux notes, working list, and explicit Codex video handoffs.",
+  "long_description": "Use Flux through ten bounded MCP tools that list, read, and create local notes, fetch complete native YouTube captions, read or replace the current working list, bind the current Codex task, and claim or complete durable video handoffs. Queueing never wakes or messages a task. The bundle cannot watch videos and does not expose arbitrary files, deletion, shell commands, cloud sync, agent routing, or secrets.",
+  "author": {
+    "name": "Flux"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "mcp/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/mcp/server.js"
+      ],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "flux_list_notes",
+      "description": "List Flux note metadata with optional folder and source filters."
+    },
+    {
+      "name": "flux_read_note",
+      "description": "Read one complete Markdown note by stable identifier and folder."
+    },
+    {
+      "name": "flux_create_note",
+      "description": "Save user-provided text as a local Markdown note."
+    },
+    {
+      "name": "flux_fetch_youtube_transcript",
+      "description": "Fetch native YouTube captions and save the complete transcript locally."
+    },
+    {
+      "name": "flux_read_working_list",
+      "description": "Read the current Flux working list."
+    },
+    {
+      "name": "flux_bind_current_codex_task",
+      "description": "Bind browser Flux to the explicit current Codex task without waking it."
+    },
+    {
+      "name": "flux_claim_video_handoff",
+      "description": "Claim the exact visible handoff ID for this task and read its preserved source transcript."
+    },
+    {
+      "name": "flux_complete_video_handoff",
+      "description": "Publish downstream analysis for a handoff claimed by this task."
+    },
+    {
+      "name": "flux_fail_video_handoff",
+      "description": "Mark a claimed video handoff failed while preserving its source transcript."
+    },
+    {
+      "name": "flux_save_working_list",
+      "description": "Replace the current Flux working list with an explicit title and items."
+    }
+  ],
+  "tools_generated": false,
+  "keywords": [
+    "notes",
+    "youtube",
+    "transcripts",
+    "working-list",
+    "video-digest",
+    "local"
+  ],
+  "license": "UNLICENSED",
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18"
+    }
+  }
+}
