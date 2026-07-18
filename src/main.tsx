@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import { tokens } from './tokens';
 import { getFluxLibrary, isFluxDesktop } from './flux-client';
+import { handoffForVisibleNote } from './video-handoff';
 import './theme.css';
 import './styles.css';
 
@@ -878,18 +879,51 @@ function YouTubeCard({
   const [url, setUrl] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
   const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
+  const [handoffAction, setHandoffAction] = useState<'idle' | 'queueing' | 'failed'>('idle');
+  const [taskTarget, setTaskTarget] = useState<FluxCodexTaskReference | null>(null);
+  const [taskTargetReady, setTaskTargetReady] = useState(false);
+  const [handoff, setHandoff] = useState<FluxVideoHandoff | null>(null);
   const [clearedTranscriptKey, setClearedTranscriptKey] = useState('');
   const transcriptKey = youtubeNote ? `${youtubeNote.folder}/${youtubeNote.id}` : '';
   const activeYoutubeNote = clearedTranscriptKey === transcriptKey ? null : youtubeNote;
   const isBusy = captureStatus === 'importing' || captureStatus === 'saving' || captureStatus === 'recording';
   const transcript = activeYoutubeNote?.transcript || activeYoutubeNote?.transcriptPreview || '';
   const youtubeMarkdown = `# YouTube transcript\n\n## Transcript\n${transcript.trim()}\n`;
+  const visibleHandoff = handoffForVisibleNote(handoff, activeYoutubeNote);
+  const handoffPending = ['generated', 'queued', 'claimed'].includes(visibleHandoff?.state || '');
 
   useEffect(() => {
     setCopyStatus('idle');
     setExportStatus('idle');
+    setHandoffAction('idle');
     setClearedTranscriptKey('');
   }, [youtubeNote?.id, youtubeNote?.folder]);
+
+  useEffect(() => {
+    let canceled = false;
+    const refreshHandoff = async () => {
+      try {
+        const library = requireFluxLibrary();
+        const target = await library.readCodexTaskTarget();
+        const latest = target ? await library.readLatestVideoHandoff(target.taskId) : null;
+        if (!canceled) {
+          setTaskTarget(target);
+          setTaskTargetReady(true);
+          setHandoff(latest);
+        }
+      } catch {
+        if (!canceled) {
+          setTaskTargetReady(true);
+        }
+      }
+    };
+    void refreshHandoff();
+    const interval = window.setInterval(() => void refreshHandoff(), 1_500);
+    return () => {
+      canceled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const submitUrl = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -930,6 +964,23 @@ function YouTubeCard({
     }
   };
 
+  const queueHandoff = async () => {
+    if (!activeYoutubeNote || !taskTarget || handoffAction === 'queueing' || handoffPending || isBusy) {
+      return;
+    }
+    setHandoffAction('queueing');
+    try {
+      const created = await requireFluxLibrary().createVideoHandoff({
+        expectedTaskId: taskTarget.taskId,
+        sourceNote: { noteId: activeYoutubeNote.id, folder: activeYoutubeNote.folder }
+      });
+      setHandoff(created);
+      setHandoffAction('idle');
+    } catch {
+      setHandoffAction('failed');
+    }
+  };
+
   const clearTranscript = () => {
     setUrl('');
     if (transcriptKey) {
@@ -937,21 +988,61 @@ function YouTubeCard({
     }
     setCopyStatus('idle');
     setExportStatus('idle');
+    setHandoffAction('idle');
   };
+
+  const taskLabel = taskTarget?.taskName || taskTarget?.taskId || 'Not connected';
+  const handoffStatusText = !taskTargetReady
+    ? 'Checking the Codex task connection.'
+    : !taskTarget
+      ? 'Not connected. In this Codex task, say: Connect Flux to this task.'
+      : handoffAction === 'failed'
+        ? 'Flux could not create the handoff. Nothing was queued.'
+        : !visibleHandoff
+          ? 'Connected. Generate a transcript, then queue it for this Codex task.'
+          : visibleHandoff.state === 'queued'
+            ? 'Queued. This does not wake Codex. Message this Codex task: Digest the queued Flux video.'
+            : visibleHandoff.state === 'claimed'
+              ? 'Claimed by this Codex task. The raw transcript remains unchanged.'
+              : visibleHandoff.state === 'analysis_ready'
+                ? 'Analysis ready. The raw transcript remains available above.'
+                : visibleHandoff.state === 'failed'
+                  ? 'Analysis failed. The raw transcript remains available above.'
+                  : 'The handoff record was generated and is being queued.';
+  const queueButtonLabel = handoffAction === 'queueing'
+    ? 'Queuing...'
+    : visibleHandoff?.state === 'queued'
+      ? 'Queued for this Codex task'
+      : visibleHandoff?.state === 'claimed'
+        ? 'Claimed by this Codex task'
+        : 'Queue for this Codex task';
 
   return (
     <section className="glass-pane workbench-card youtube-card" aria-label="YouTube analysis">
       <WorkbenchHeader />
-      <div className="analysis-box transcript-box">
-        <span>Transcript: YouTube</span>
-        <pre>{transcript || 'Paste a YouTube URL and Flux will pull every captioned word into this box.'}</pre>
-      </div>
+      <section className="source-metadata" aria-label="Source metadata">
+        <span>Source</span>
+        <strong>{activeYoutubeNote?.url || 'No YouTube source generated'}</strong>
+        <time dateTime={activeYoutubeNote?.created || ''}>
+          {activeYoutubeNote ? new Date(activeYoutubeNote.created).toLocaleString() : 'No capture timestamp'}
+        </time>
+      </section>
+
+      <section className="analysis-box transcript-box" aria-label="Transcript">
+        <span>Transcript</span>
+        <pre aria-label="YouTube transcript">
+          {transcript || 'Paste a YouTube URL and Flux will pull every captioned word into this box.'}
+        </pre>
+      </section>
 
       <form className="inline-paste-box" onSubmit={submitUrl}>
         <IconLink />
         <textarea
           value={url}
-          onChange={(event) => setUrl(event.target.value)}
+          onChange={(event) => {
+            setUrl(event.target.value);
+            setHandoffAction('idle');
+          }}
           placeholder="Paste URL: YouTube"
           aria-label="Paste YouTube URL"
           rows={2}
@@ -965,7 +1056,37 @@ function YouTubeCard({
         >
           Generate
         </button>
+        <button
+          type="button"
+          className="digest-button"
+          disabled={!activeYoutubeNote || !taskTarget || isBusy || handoffAction === 'queueing' || handoffPending}
+          aria-label="Queue for this Codex task"
+          onClick={queueHandoff}
+        >
+          {queueButtonLabel}
+        </button>
       </form>
+
+      <section className="handoff-status" aria-label="Handoff status" role="status" aria-live="polite">
+        <div>
+          <span>Codex task</span>
+          <strong>{taskLabel}</strong>
+        </div>
+        <div>
+          <span>Handoff</span>
+          <strong>{visibleHandoff?.handoffId || 'None'}</strong>
+        </div>
+        <div>
+          <span>State</span>
+          <strong>{visibleHandoff?.state || 'none'}</strong>
+        </div>
+        <p>{handoffStatusText}</p>
+      </section>
+
+      <section className="analysis-result" aria-label="Analysis result">
+        <span>Analysis result</span>
+        <pre>{visibleHandoff?.analysisResult || visibleHandoff?.failureMessage || 'No Codex analysis yet.'}</pre>
+      </section>
 
       <div className="card-actions">
         <GlassButton onClick={copyMarkdown} disabled={!transcript.trim() || copyStatus === 'copying'}>
@@ -1000,6 +1121,13 @@ function ScreenshotTrayCard() {
   const [status, setStatus] = useState<'idle' | 'capturing' | 'copying' | 'copied' | 'saving' | 'saved'>('idle');
   const selectedScreenshot =
     screenshots.find((screenshot) => screenshot.filePath === selectedPath) ?? screenshots[0] ?? null;
+  const selectedScope = selectedScreenshot?.scope === 'uploaded_image'
+    ? 'Uploaded image'
+    : selectedScreenshot?.scope === 'flux_page_capture'
+      ? 'Flux-page capture'
+      : selectedScreenshot
+        ? 'Desktop capture'
+        : 'No capture scope';
   const desktopCapture = isFluxDesktop();
   const desktopLibrary = window.fluxLibrary;
 
@@ -1092,14 +1220,16 @@ function ScreenshotTrayCard() {
     <section className="glass-pane workbench-card screenshot-card" aria-label="Screenshot tray">
       <WorkbenchHeader />
       <div className="card-topline">
-        <span className="tray-status">{selectedScreenshot ? selectedScreenshot.fileName : 'No screenshot selected'}</span>
+        <span className="tray-status">
+          {selectedScreenshot ? `${selectedScope}: ${selectedScreenshot.fileName}` : selectedScope}
+        </span>
         <button
           type="button"
           className="mini-mic screen-capture-button"
-          aria-label="Capture screenshot"
+          aria-label="Desktop capture"
           onClick={capture}
           disabled={!desktopCapture || status === 'capturing'}
-          title={desktopCapture ? 'Capture screenshot' : 'Available in Flux desktop'}
+          title={desktopCapture ? 'Desktop capture' : 'Browser Flux does not capture the desktop'}
         >
           <IconFile />
         </button>
@@ -1123,7 +1253,7 @@ function ScreenshotTrayCard() {
           ) : (
             <p>
               {!desktopCapture
-                ? 'Screenshot tray is available in Flux desktop.'
+                ? 'Browser Flux does not capture the desktop.'
                 : status === 'capturing'
                   ? 'Capturing...'
                   : 'No screenshots yet.'}

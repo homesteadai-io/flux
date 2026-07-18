@@ -117,3 +117,135 @@ sending, or agent routing is added in this phase.
   of agent-generated test content.
 - Installing the MCPB into Claude or sending a Claude message without Adam's
   action-time approval.
+
+# Flux Phase 7 - Video Digest Queue
+
+## Authority and baseline
+
+- Adam selected the lightweight queue path, not video processing inside Flux.
+- This phase is stacked on the reviewed Phase 6 head
+  `38f8b3d16f64997eb857d8f32cd33a885d0babf9`.
+- Phase 6 PR #12 remains open and is not merged by this phase.
+- The approved four-card glass layout and existing YouTube transcript path remain
+  unchanged except for the new bounded action on the YouTube card.
+
+## Goal
+
+Let Adam mark one YouTube video as the current **Digest** request so a Control
+Room coding agent can read that request through Flux MCP, invoke its installed
+video-watching skill, and return a visual-plus-transcript summary without Adam
+watching the video or touching the clipboard.
+
+## Product contract
+
+- Add a `Digest` button beside `Generate` on the YouTube card.
+- The button may use either the URL currently pasted into the card or the source
+  URL of the displayed YouTube transcript.
+- Pressing `Digest` stores one current request in the shared Flux data directory.
+  A later explicit request replaces the prior request.
+- The UI reports `Queued` only after the request is durably stored. It must not
+  claim that the video was watched, analyzed, summarized, or delivered.
+- The complete native-caption transcript remains available and unchanged.
+- Desktop, browser, and MCP read the same request under `C:\Users\Adam\Flux`.
+- The request contains a validated HTTPS YouTube URL, request timestamp, and
+  optional source-note identity/title. It contains no API key or arbitrary path.
+- Add one read-only MCP tool, `flux_read_video_digest_request`, which returns the
+  current request. The agent decides whether and how to invoke its available
+  video-watching skill.
+
+## Hard boundaries
+
+- Flux does not download video, extract frames, call Whisper, invoke a shell, or
+  duplicate the Watch skill.
+- Flux does not send a message to Claude or Codex and does not claim control of
+  the active Control Room task.
+- No polling agent, background worker, cloud sync, delete operation, or arbitrary
+  filesystem access is added.
+- Existing six MCP tools keep their behavior; Phase 7 adds exactly one bounded
+  read-only tool.
+
+## Pass/fail checks
+
+1. A valid pasted YouTube URL can be queued from desktop and browser Flux.
+2. A displayed transcript with a source URL can be queued when the paste box is
+   empty.
+3. Invalid or non-YouTube URLs are rejected before durable state changes.
+4. Restarting Flux preserves the current digest request.
+5. `flux_read_video_digest_request` returns the same queued request and is marked
+   read-only, non-destructive, idempotent, and closed-world.
+6. The MCP server lists exactly seven tools and exposes no video execution or
+   shell capability.
+7. The transcript generation, copy, export, and clear controls still work.
+
+## Phase 7 correction - browser Codex handoff contract
+
+This correction supersedes Phase 7's single replaceable request, desktop/browser
+equivalence, and exactly-seven-tools clauses above. All other hard boundaries stay
+in force.
+
+### Product surface
+
+- The accepted product surface is Flux in the Codex in-app browser at
+  `http://127.0.0.1:4783/`.
+- Browser acceptance must run with the native Electron window closed. A standalone
+  loopback browser host serves the built UI and shared Flux core.
+- Flux is a local material inbox and handoff surface. Codex tasks remain the
+  thinking layer.
+
+### Task identity and wake-up boundary
+
+- Flux binds to a Codex task only from a concrete `CODEX_THREAD_ID` supplied by
+  the Codex process or by the explicit MCP bind tool.
+- The browser shows the bound task ID. It does not invent a task name or imply
+  that a local file write wakes a running task.
+- If no task is bound, queueing is disabled and the browser tells Adam to say
+  `Connect Flux to this task` in the intended Codex task.
+- After queueing, the browser says exactly: `Message this Codex task: Digest the
+  queued Flux video.`
+
+### Durable handoffs
+
+- Every queue action creates a new JSON handoff under `.flux/video-handoffs/`.
+- A handoff contains a stable handoff ID, source URL, transcript capture time,
+  queued/update timestamps, the complete raw transcript, source-note identity,
+  target Codex task reference, and one lifecycle state:
+  `generated`, `queued`, `claimed`, `analysis_ready`, or `failed`.
+- The handoff is first written as `generated`, then atomically replaced with
+  `queued`. A crash between those writes leaves an honest durable state.
+- A matching Codex task may claim a queued handoff by its exact visible ID. Only that task may publish
+  its analysis or failure. The raw transcript and source note are never replaced.
+- The browser polls the latest handoff for its bound task so `queued`, `claimed`,
+  `analysis_ready`, and `failed` changes are visible without using the native UI.
+
+### Transcript integrity
+
+- YouTube transcript generation still uses native captions through `yt-dlp`.
+- Before a transcript note is saved, Flux removes a repeated full-body block when
+  the complete token sequence appears two or more times.
+- The saved Markdown preserves the original source URL, capture timestamp, and
+  one clean raw transcript body.
+
+### Browser regions
+
+- The YouTube card exposes named regions for `YouTube analysis`, `Source
+  metadata`, `Transcript`, `Handoff status`, and `Analysis result`.
+- `Copy .md` remains a human convenience and is not the Codex integration.
+- Screenshot records identify their actual capture scope. Browser Flux never
+  silently captures the desktop.
+
+### Acceptance
+
+1. With the Electron window closed, start the standalone Flux browser host and
+   open `http://127.0.0.1:4783/` in Codex's in-app browser.
+2. Generate one known YouTube transcript and verify its saved Markdown contains
+   the source URL and timestamp with no repeated full body.
+3. Verify the browser shows the bound Codex task ID. Click `Queue for this Codex
+   task` and observe a new handoff ID with `queued` state.
+4. Verify the browser plainly says that queueing does not wake the task and gives
+   the exact message Adam must send.
+5. Claim the handoff through MCP and observe `claimed`; complete it through MCP
+   and observe `analysis_ready` while the raw transcript remains unchanged.
+6. Verify all five named regions are readable in the browser DOM and no step
+   relies on the native Electron window.
+8. Typecheck, tests, browser build, desktop package, MCPB validation, visual QA,
+   and fresh review all pass on the final commit.

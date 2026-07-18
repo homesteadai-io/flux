@@ -6,11 +6,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import type {
   FluxCreateTextNotePayload,
+  FluxCodexTaskReference,
   FluxLibrarySnapshot,
   FluxNoteMutationResult,
   FluxReadNoteResult,
   FluxSaveWorkingListPayload,
   FluxSaveYouTubePayload,
+  FluxVideoHandoff,
   FluxWorkingList,
 } from '../shared/flux-contract.js';
 import { buildMcpServer, type FluxMcpCore } from './server.js';
@@ -48,6 +50,23 @@ class FakeFluxCore implements FluxMcpCore {
   };
 
   workingList: FluxWorkingList = { title: 'Today', items: ['Ship Flux'] };
+  targetTask: FluxCodexTaskReference = {
+    taskId: 'task-123',
+    taskName: 'Flux test task',
+    boundAt: '2026-07-16T13:30:00.000Z',
+  };
+  videoHandoff: FluxVideoHandoff = {
+    handoffId: '11111111-1111-4111-8111-111111111111',
+    sourceUrl: 'https://www.youtube.com/watch?v=abc123',
+    capturedAt: youtubeNote.created,
+    createdAt: '2026-07-16T13:31:00.000Z',
+    updatedAt: '2026-07-16T13:31:00.000Z',
+    queuedAt: '2026-07-16T13:31:00.000Z',
+    state: 'queued',
+    rawTranscript: youtubeNote.transcript,
+    sourceNote: { noteId: 'note-2', folder: 'Research', title: 'Video note' },
+    targetTask: this.targetTask,
+  };
   calls: Array<{ method: string; payload?: unknown }> = [];
 
   listLibrary(): FluxLibrarySnapshot {
@@ -70,6 +89,30 @@ class FakeFluxCore implements FluxMcpCore {
     return { note: youtubeNote, library: this.library };
   }
 
+  saveCodexTaskTarget(taskId: string, taskName?: string): FluxCodexTaskReference {
+    this.calls.push({ method: 'saveCodexTaskTarget', payload: { taskId, taskName } });
+    this.targetTask = { taskId, ...(taskName ? { taskName } : {}), boundAt: this.targetTask.boundAt };
+    return this.targetTask;
+  }
+
+  claimVideoHandoff(payload: { handoffId: string; taskId: string }): FluxVideoHandoff {
+    this.calls.push({ method: 'claimVideoHandoff', payload });
+    this.videoHandoff = { ...this.videoHandoff, state: 'claimed', claimedAt: '2026-07-16T13:32:00.000Z' };
+    return this.videoHandoff;
+  }
+
+  completeVideoHandoff(payload: { handoffId: string; taskId: string; analysisResult: string }): FluxVideoHandoff {
+    this.calls.push({ method: 'completeVideoHandoff', payload });
+    this.videoHandoff = { ...this.videoHandoff, state: 'analysis_ready', analysisResult: payload.analysisResult };
+    return this.videoHandoff;
+  }
+
+  failVideoHandoff(payload: { handoffId: string; taskId: string; failureMessage: string }): FluxVideoHandoff {
+    this.calls.push({ method: 'failVideoHandoff', payload });
+    this.videoHandoff = { ...this.videoHandoff, state: 'failed', failureMessage: payload.failureMessage };
+    return this.videoHandoff;
+  }
+
   readWorkingList(): FluxWorkingList {
     this.calls.push({ method: 'readWorkingList' });
     return this.workingList;
@@ -82,8 +125,8 @@ class FakeFluxCore implements FluxMcpCore {
   }
 }
 
-async function connect(core: FluxMcpCore) {
-  const server = buildMcpServer(core);
+async function connect(core: FluxMcpCore, codexTaskId: string | null = 'task-123') {
+  const server = buildMcpServer(core, codexTaskId ? { codexTaskId } : {});
   const client = new Client({ name: 'flux-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -102,14 +145,18 @@ function structured(result: Awaited<ReturnType<Client['callTool']>>): Record<str
   return result.structuredContent as Record<string, unknown>;
 }
 
-test('registers exactly the six Phase 6 Flux tools', async () => {
+test('registers exactly the ten browser-handoff Flux tools', async () => {
   const connection = await connect(new FakeFluxCore());
   try {
     const listed = await connection.client.listTools();
     assert.deepEqual(
       listed.tools.map((tool) => tool.name).sort(),
       [
+        'flux_bind_current_codex_task',
+        'flux_claim_video_handoff',
+        'flux_complete_video_handoff',
         'flux_create_note',
+        'flux_fail_video_handoff',
         'flux_fetch_youtube_transcript',
         'flux_list_notes',
         'flux_read_note',
@@ -119,14 +166,21 @@ test('registers exactly the six Phase 6 Flux tools', async () => {
     );
     const youtubeTool = listed.tools.find((tool) => tool.name === 'flux_fetch_youtube_transcript');
     const localWriteTool = listed.tools.find((tool) => tool.name === 'flux_create_note');
+    const claimTool = listed.tools.find((tool) => tool.name === 'flux_claim_video_handoff');
     assert.equal(youtubeTool?.annotations?.openWorldHint, true);
     assert.equal(localWriteTool?.annotations?.openWorldHint, false);
+    assert.deepEqual(claimTool?.annotations, {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
   } finally {
     await connection.close();
   }
 });
 
-test('routes all six tools and returns bounded structured payloads', async () => {
+test('routes all ten tools and returns bounded structured payloads', async () => {
   const core = new FakeFluxCore();
   const connection = await connect(core);
 
@@ -170,6 +224,32 @@ test('routes all six tools and returns bounded structured payloads', async () =>
     });
     assert.deepEqual(structured(readList).workingList, { title: 'Today', items: ['Ship Flux'] });
 
+    const bound = await connection.client.callTool({
+      name: 'flux_bind_current_codex_task',
+      arguments: { taskName: 'Flux test task' },
+    });
+    assert.equal((structured(bound).targetTask as FluxCodexTaskReference).taskId, 'task-123');
+    assert.equal(structured(bound).wakeUp, false);
+
+    const claimed = await connection.client.callTool({
+      name: 'flux_claim_video_handoff',
+      arguments: { handoffId: core.videoHandoff.handoffId },
+    });
+    assert.equal((structured(claimed).handoff as FluxVideoHandoff).state, 'claimed');
+    assert.equal((structured(claimed).handoff as FluxVideoHandoff).rawTranscript, youtubeNote.transcript);
+
+    const completed = await connection.client.callTool({
+      name: 'flux_complete_video_handoff',
+      arguments: { handoffId: core.videoHandoff.handoffId, analysisResult: 'Grounded analysis.' },
+    });
+    assert.equal((structured(completed).handoff as FluxVideoHandoff).state, 'analysis_ready');
+
+    const failed = await connection.client.callTool({
+      name: 'flux_fail_video_handoff',
+      arguments: { handoffId: core.videoHandoff.handoffId, failureMessage: 'Visual frames unavailable.' },
+    });
+    assert.equal((structured(failed).handoff as FluxVideoHandoff).state, 'failed');
+
     const savedList = await connection.client.callTool({
       name: 'flux_save_working_list',
       arguments: { title: 'Tomorrow', items: ['Package Flux', 'Open the control room'] },
@@ -191,6 +271,33 @@ test('routes all six tools and returns bounded structured payloads', async () =>
         {
           method: 'saveYouTubeUrl',
           payload: { url: 'https://www.youtube.com/watch?v=abc123' },
+        },
+        {
+          method: 'saveCodexTaskTarget',
+          payload: { taskId: 'task-123', taskName: 'Flux test task' },
+        },
+        {
+          method: 'claimVideoHandoff',
+          payload: {
+            handoffId: '11111111-1111-4111-8111-111111111111',
+            taskId: 'task-123'
+          },
+        },
+        {
+          method: 'completeVideoHandoff',
+          payload: {
+            handoffId: '11111111-1111-4111-8111-111111111111',
+            taskId: 'task-123',
+            analysisResult: 'Grounded analysis.',
+          },
+        },
+        {
+          method: 'failVideoHandoff',
+          payload: {
+            handoffId: '11111111-1111-4111-8111-111111111111',
+            taskId: 'task-123',
+            failureMessage: 'Visual frames unavailable.',
+          },
         },
         {
           method: 'saveWorkingList',
@@ -230,6 +337,25 @@ test('rejects path-like identifiers and non-YouTube transcript URLs before core 
     assert.equal(core.calls.some((call) => call.method === 'readNote'), false);
     assert.equal(core.calls.some((call) => call.method === 'saveYouTubeUrl'), false);
     assert.equal(core.calls.some((call) => call.method === 'saveWorkingList'), false);
+  } finally {
+    await connection.close();
+  }
+});
+
+test('does not invent a Codex task binding when CODEX_THREAD_ID is unavailable', async () => {
+  const core = new FakeFluxCore();
+  const connection = await connect(core, null);
+  try {
+    const bind = await connection.client.callTool({
+      name: 'flux_bind_current_codex_task',
+      arguments: {},
+    });
+    assert.equal(bind.isError, true);
+    assert.deepEqual(structured(bind), {
+      ok: false,
+      error: { code: 'BIND_CODEX_TASK_FAILED', message: 'Flux could not connect to this Codex task.' },
+    });
+    assert.equal(core.calls.some((call) => call.method === 'saveCodexTaskTarget'), false);
   } finally {
     await connection.close();
   }

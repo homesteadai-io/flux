@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld('fluxLibrary', {
   saveRecording: (payload: { audioData: ArrayBuffer; mimeType: string }) =>
     ipcRenderer.invoke('capture:save-recording', payload),
   saveYouTubeUrl: (payload: { url: string }) => ipcRenderer.invoke('capture:save-youtube-url', payload),
+  readCodexTaskTarget: () => ipcRenderer.invoke('codex-task:read'),
+  readLatestVideoHandoff: (taskId: string) => ipcRenderer.invoke('video-handoff:latest', taskId),
+  createVideoHandoff: (payload: {
+    expectedTaskId: string;
+    sourceNote: { noteId: string; folder: string };
+  }) =>
+    ipcRenderer.invoke('video-handoff:create', payload),
   saveEnvLocal: (payload: { content: string }) => ipcRenderer.invoke('capture:save-env-local', payload),
   copyMarkdown: (payload: { noteId: string; folder: string }) =>
     ipcRenderer.invoke('note:copy-markdown', payload),

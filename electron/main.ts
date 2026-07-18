@@ -15,7 +15,11 @@ import {
 import OpenAI, { toFile } from 'openai';
 import { FluxCore } from '../server/flux-core.js';
 import { startFluxHttpServer } from '../server/http-server.js';
-import type { FluxSaveRecordingPayload, FluxSaveYouTubePayload } from '../shared/flux-contract.js';
+import type {
+  FluxCreateVideoHandoffPayload,
+  FluxSaveRecordingPayload,
+  FluxSaveYouTubePayload
+} from '../shared/flux-contract.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -139,6 +143,7 @@ type FluxScreenshot = {
   filePath: string;
   fileName: string;
   created: string;
+  scope: 'desktop_capture';
   dataUrl: string;
   width: number;
   height: number;
@@ -1002,6 +1007,7 @@ function screenshotFromFile(filePath: string): FluxScreenshot {
     filePath,
     fileName: path.basename(filePath),
     created: stats.mtime.toISOString(),
+    scope: 'desktop_capture',
     dataUrl: image.toDataURL(),
     width: size.width,
     height: size.height
@@ -1233,6 +1239,9 @@ app.whenReady().then(async () => {
     dataDir: getDataDir(),
     aiProviderFactory: createOpenAIProvider
   });
+  if (process.env.CODEX_THREAD_ID?.trim()) {
+    fluxCore.saveCodexTaskTarget(process.env.CODEX_THREAD_ID, process.env.CODEX_THREAD_TITLE);
+  }
 
   try {
     fluxBrowserHost = await startFluxHttpServer({
@@ -1241,7 +1250,7 @@ app.whenReady().then(async () => {
     });
   } catch {
     fluxBrowserHost = undefined;
-    console.error('Flux browser host could not start; desktop fallback remains available.');
+    console.error('Flux browser host could not start.');
   }
 
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
@@ -1291,6 +1300,21 @@ app.whenReady().then(async () => {
   ipcMain.handle('capture:save-youtube-url', (event, payload: FluxSaveYouTubePayload) => {
     assertTrustedSender(event);
     return fluxCore.saveYouTubeUrl(payload);
+  });
+
+  ipcMain.handle('codex-task:read', (event) => {
+    assertTrustedSender(event);
+    return fluxCore.readCodexTaskTarget();
+  });
+
+  ipcMain.handle('video-handoff:latest', (event, taskId: string) => {
+    assertTrustedSender(event);
+    return fluxCore.readLatestVideoHandoff(taskId);
+  });
+
+  ipcMain.handle('video-handoff:create', (event, payload: FluxCreateVideoHandoffPayload) => {
+    assertTrustedSender(event);
+    return fluxCore.createVideoHandoff(payload);
   });
 
   ipcMain.handle('capture:save-env-local', (event, payload: SaveEnvPayload) => {
