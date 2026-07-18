@@ -13,10 +13,11 @@ type FluxHttpCore = {
   createTextNote: (payload: { title: string; content: string; folder?: string }) => unknown;
   saveRecording: (payload: { audioData: Uint8Array; mimeType: string }) => Promise<unknown>;
   saveYouTubeUrl: (payload: { url: string }) => Promise<unknown>;
-  readVideoDigestRequest: () => unknown;
-  saveVideoDigestRequest: (payload: {
-    url: string;
-    sourceNote?: { noteId: string; folder: string };
+  readCodexTaskTarget: () => unknown;
+  readLatestVideoHandoff: (taskId: string) => unknown;
+  createVideoHandoff: (payload: {
+    expectedTaskId: string;
+    sourceNote: { noteId: string; folder: string };
   }) => unknown;
   createFolder: (name: string) => unknown;
   moveNote: (locator: { noteId: string; folder: string }, targetFolder: string) => unknown;
@@ -202,29 +203,33 @@ async function handleApi(
     sendJson(response, 201, await core.saveYouTubeUrl({ url: requireString(body.url, 'url', 2048) }));
     return;
   }
-  if (method === 'GET' && pathname === '/api/video-digest-request') {
-    sendJson(response, 200, await core.readVideoDigestRequest());
+  if (method === 'GET' && pathname === '/api/codex-task') {
+    sendJson(response, 200, await core.readCodexTaskTarget());
     return;
   }
-  if (method === 'PUT' && pathname === '/api/video-digest-request') {
-    const body = await readJson(request);
-    let sourceNote: { noteId: string; folder: string } | undefined;
-    if (body.sourceNote !== undefined) {
-      if (!body.sourceNote || typeof body.sourceNote !== 'object' || Array.isArray(body.sourceNote)) {
-        throw new Error('sourceNote must be a note identifier and folder.');
-      }
-      const source = body.sourceNote as Record<string, unknown>;
-      sourceNote = {
-        noteId: requireString(source.noteId, 'sourceNote.noteId', 160),
-        folder: requireString(source.folder, 'sourceNote.folder', 64)
-      };
-    }
+  if (method === 'GET' && pathname === '/api/video-handoffs/latest') {
     sendJson(
       response,
       200,
-      await core.saveVideoDigestRequest({
-        url: requireString(body.url, 'url', 2048),
-        ...(sourceNote ? { sourceNote } : {})
+      await core.readLatestVideoHandoff(requireString(url.searchParams.get('taskId'), 'taskId', 160))
+    );
+    return;
+  }
+  if (method === 'POST' && pathname === '/api/video-handoffs') {
+    const body = await readJson(request);
+    if (!body.sourceNote || typeof body.sourceNote !== 'object' || Array.isArray(body.sourceNote)) {
+      throw new Error('sourceNote must be a note identifier and folder.');
+    }
+    const source = body.sourceNote as Record<string, unknown>;
+    sendJson(
+      response,
+      201,
+      await core.createVideoHandoff({
+        expectedTaskId: requireString(body.expectedTaskId, 'expectedTaskId', 160),
+        sourceNote: {
+          noteId: requireString(source.noteId, 'sourceNote.noteId', 160),
+          folder: requireString(source.folder, 'sourceNote.folder', 64)
+        }
       })
     );
     return;

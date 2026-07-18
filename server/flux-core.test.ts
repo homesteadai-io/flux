@@ -303,7 +303,49 @@ test('saveYouTubeUrl reads heading-like transcript lines through the tail unchan
   assert.equal(read.note.analysis, undefined);
 });
 
-test('video digest request is validated, durable, and preserves its source note', async (t) => {
+test('saveYouTubeUrl removes a repeated full transcript block before saving', async (t) => {
+  const cleanBody = Array.from({ length: 120 }, (_, index) => `word${index}`).join(' ');
+  const { core, dataDir } = createTestCore(t, {
+    transcriptEngine: {
+      async getCleanTranscript() {
+        return { ok: true, transcript: `${cleanBody}\n\n${cleanBody}` };
+      }
+    }
+  });
+
+  const saved = await core.saveYouTubeUrl({ url: 'https://youtu.be/repeated-body' });
+  const markdown = readFileSync(path.join(dataDir, 'Transcript Notes', `${saved.note.id}.md`), 'utf8');
+  assert.equal(saved.note.transcript, cleanBody);
+  assert.equal(saved.note.transcript.split('word0').length - 1, 1);
+  assert.equal(markdown.split('word0').length - 1, 1);
+  assert.match(markdown, /url: "https:\/\/youtu\.be\/repeated-body"/);
+  assert.match(markdown, /created: \d{4}-\d{2}-\d{2}T/);
+});
+
+test('duplicate guarding handles very short exact repeats without removing distinct repeated phrases', async (t) => {
+  const shortBody = Array.from({ length: 11 }, (_, index) => `short${index}`).join(' ');
+  let transcript = `${shortBody}\n\n${shortBody}`;
+  const { core } = createTestCore(t, {
+    transcriptEngine: {
+      async getCleanTranscript() {
+        return { ok: true, transcript };
+      }
+    }
+  });
+
+  const repeated = await core.saveYouTubeUrl({ url: 'https://youtu.be/short-repeat' });
+  assert.equal(repeated.note.transcript, shortBody);
+
+  transcript = 'echo echo';
+  const oneWord = await core.saveYouTubeUrl({ url: 'https://youtu.be/one-word-repeat' });
+  assert.equal(oneWord.note.transcript, 'echo');
+
+  transcript = `${shortBody}\n\n${shortBody} final distinct caption words`;
+  const distinct = await core.saveYouTubeUrl({ url: 'https://youtu.be/short-distinct' });
+  assert.equal(distinct.note.transcript, transcript);
+});
+
+test('video handoffs are per-action, durable, task-bound, and preserve raw transcripts', async (t) => {
   const { core, dataDir } = createTestCore(t, {
     transcriptEngine: {
       async getCleanTranscript() {
@@ -311,35 +353,132 @@ test('video digest request is validated, durable, and preserves its source note'
       }
     }
   });
-  assert.equal(core.readVideoDigestRequest(), null);
+  assert.equal(core.readCodexTaskTarget(), null);
+  assert.equal(core.readLatestVideoHandoff(), null);
+  const target = core.saveCodexTaskTarget('task-123', 'Flux acceptance');
+  assert.equal(target.taskId, 'task-123');
+  assert.deepEqual(core.saveCodexTaskTarget('task-123', 'Flux acceptance'), target);
 
   const note = await core.saveYouTubeUrl({ url: 'https://youtu.be/digest-example' });
-  const queued = core.saveVideoDigestRequest({
-    url: note.note.url!,
+  const first = core.createVideoHandoff({
+    expectedTaskId: 'task-123',
+    sourceNote: { noteId: note.note.id, folder: note.note.folder }
+  });
+  const second = core.createVideoHandoff({
+    expectedTaskId: 'task-123',
     sourceNote: { noteId: note.note.id, folder: note.note.folder }
   });
 
-  assert.equal(queued.url, note.note.url);
-  assert.equal(Number.isFinite(Date.parse(queued.requestedAt)), true);
-  assert.deepEqual(queued.sourceNote, {
+  assert.notEqual(first.handoffId, second.handoffId);
+  assert.equal(first.state, 'queued');
+  assert.equal(first.sourceUrl, note.note.url);
+  assert.equal(first.rawTranscript, note.note.transcript);
+  assert.deepEqual(first.sourceNote, {
     noteId: note.note.id,
     folder: note.note.folder,
     title: note.note.title
   });
-  assert.deepEqual(new FluxCore({ dataDir }).readVideoDigestRequest(), queued);
-
-  const replaced = core.saveVideoDigestRequest({
-    url: 'https://www.youtube.com/watch?v=replacement'
-  });
-  assert.equal(replaced.url, 'https://www.youtube.com/watch?v=replacement');
-  assert.equal(replaced.sourceNote, undefined);
-  assert.deepEqual(new FluxCore({ dataDir }).readVideoDigestRequest(), replaced);
-
+  assert.equal(first.targetTask.taskId, 'task-123');
+  assert.equal(core.listVideoHandoffs('task-123').length, 2);
+  core.saveCodexTaskTarget('task-456');
   assert.throws(
-    () => core.saveVideoDigestRequest({ url: 'http://youtu.be/not-https' }),
-    /require an HTTPS YouTube URL/
+    () => core.createVideoHandoff({
+      expectedTaskId: 'task-123',
+      sourceNote: { noteId: note.note.id, folder: note.note.folder }
+    }),
+    /connected Codex task changed/
   );
-  assert.deepEqual(core.readVideoDigestRequest(), replaced);
+  const reboundTarget = core.saveCodexTaskTarget('task-123', 'Flux acceptance');
+
+  const restarted = new FluxCore({ dataDir });
+  assert.deepEqual(restarted.readCodexTaskTarget(), reboundTarget);
+  assert.equal(restarted.readLatestVideoHandoff()?.handoffId, second.handoffId);
+
+  const claimed = restarted.claimVideoHandoff({ handoffId: second.handoffId, taskId: 'task-123' });
+  assert.equal(claimed.handoffId, second.handoffId);
+  assert.equal(claimed.state, 'claimed');
+  assert.equal(restarted.claimVideoHandoff({ handoffId: second.handoffId, taskId: 'task-123' }).state, 'claimed');
+  assert.throws(
+    () => restarted.completeVideoHandoff({
+      handoffId: second.handoffId,
+      taskId: 'wrong-task',
+      analysisResult: 'Should not save.'
+    }),
+    /different Codex task/
+  );
+
+  const completed = restarted.completeVideoHandoff({
+    handoffId: second.handoffId,
+    taskId: 'task-123',
+    analysisResult: 'Grounded downstream analysis.'
+  });
+  assert.equal(completed.state, 'analysis_ready');
+  assert.equal(completed.analysisResult, 'Grounded downstream analysis.');
+  assert.equal(completed.rawTranscript, first.rawTranscript);
+
+  const claimedFirst = restarted.claimVideoHandoff({ handoffId: first.handoffId, taskId: 'task-123' });
+  const failed = restarted.failVideoHandoff({
+    handoffId: claimedFirst.handoffId,
+    taskId: 'task-123',
+    failureMessage: 'Video frames were unavailable.'
+  });
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.rawTranscript, first.rawTranscript);
+  assert.equal(
+    readdirSync(path.join(dataDir, '.flux', 'video-handoffs')).filter((name) => /^[a-f0-9-]{36}\.json$/iu.test(name)).length,
+    2
+  );
+});
+
+test('generated handoffs recover to queued and terminal transitions are first-writer-wins', async (t) => {
+  const { core, dataDir } = createTestCore(t, {
+    transcriptEngine: {
+      async getCleanTranscript() {
+        return { ok: true, transcript: 'Short source transcript for lifecycle recovery.' };
+      }
+    }
+  });
+  core.saveCodexTaskTarget('task-race');
+  const note = await core.saveYouTubeUrl({ url: 'https://youtu.be/lifecycle-race' });
+  const queued = core.createVideoHandoff({
+    expectedTaskId: 'task-race',
+    sourceNote: { noteId: note.note.id, folder: note.note.folder }
+  });
+  const handoffPath = path.join(dataDir, '.flux', 'video-handoffs', `${queued.handoffId}.json`);
+  const stranded = JSON.parse(readFileSync(handoffPath, 'utf8')) as Record<string, unknown>;
+  stranded.state = 'generated';
+  delete stranded.queuedAt;
+  writeFileSync(handoffPath, `${JSON.stringify(stranded, null, 2)}\n`);
+
+  const firstProcess = new FluxCore({ dataDir });
+  const recovered = firstProcess.readLatestVideoHandoff('task-race');
+  assert.equal(recovered?.handoffId, queued.handoffId);
+  assert.equal(recovered?.state, 'queued');
+  const handoffDir = path.join(dataDir, '.flux', 'video-handoffs');
+  writeFileSync(path.join(handoffDir, `${queued.handoffId}.claim.interrupted.tmp`), 'partial');
+  firstProcess.claimVideoHandoff({ handoffId: queued.handoffId, taskId: 'task-race' });
+  assert.equal(readFileSync(path.join(handoffDir, `${queued.handoffId}.claim`), 'utf8').trim(), 'task-race');
+
+  const secondProcess = new FluxCore({ dataDir });
+  writeFileSync(path.join(handoffDir, `${queued.handoffId}.terminal.interrupted.tmp`), '{');
+  const completed = firstProcess.completeVideoHandoff({
+    handoffId: queued.handoffId,
+    taskId: 'task-race',
+    analysisResult: 'The winning terminal result.'
+  });
+  const competingFailure = secondProcess.failVideoHandoff({
+    handoffId: queued.handoffId,
+    taskId: 'task-race',
+    failureMessage: 'This must not replace the winner.'
+  });
+  assert.equal(completed.state, 'analysis_ready');
+  assert.equal(competingFailure.state, 'analysis_ready');
+  assert.equal(competingFailure.analysisResult, 'The winning terminal result.');
+  assert.equal(competingFailure.failureMessage, undefined);
+  assert.equal(
+    JSON.parse(readFileSync(path.join(handoffDir, `${queued.handoffId}.terminal.json`), 'utf8')).state,
+    'analysis_ready'
+  );
 });
 
 test('saveRecording persists audio before injected transcription and analysis', async (t) => {

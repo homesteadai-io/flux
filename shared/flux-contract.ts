@@ -60,15 +60,51 @@ export type FluxSaveYouTubePayload = {
   url: string;
 };
 
-export type FluxVideoDigestRequest = {
-  url: string;
-  requestedAt: string;
-  sourceNote?: FluxNoteLocator & { title: string };
+export type FluxCodexTaskReference = {
+  taskId: string;
+  taskName?: string;
+  boundAt: string;
 };
 
-export type FluxSaveVideoDigestRequestPayload = {
-  url: string;
-  sourceNote?: FluxNoteLocator;
+export type FluxVideoHandoffState = 'generated' | 'queued' | 'claimed' | 'analysis_ready' | 'failed';
+
+export type FluxVideoHandoff = {
+  handoffId: string;
+  sourceUrl: string;
+  capturedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  queuedAt?: string;
+  claimedAt?: string;
+  completedAt?: string;
+  state: FluxVideoHandoffState;
+  rawTranscript: string;
+  sourceNote: FluxNoteLocator & { title: string };
+  targetTask: FluxCodexTaskReference;
+  analysisResult?: string;
+  failureMessage?: string;
+};
+
+export type FluxCreateVideoHandoffPayload = {
+  expectedTaskId: string;
+  sourceNote: FluxNoteLocator;
+};
+
+export type FluxClaimVideoHandoffPayload = {
+  handoffId: string;
+  taskId: string;
+};
+
+export type FluxCompleteVideoHandoffPayload = {
+  handoffId: string;
+  taskId: string;
+  analysisResult: string;
+};
+
+export type FluxFailVideoHandoffPayload = {
+  handoffId: string;
+  taskId: string;
+  failureMessage: string;
 };
 
 export type FluxNoteMutationResult = {

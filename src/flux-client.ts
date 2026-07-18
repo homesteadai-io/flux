@@ -76,9 +76,11 @@ export const browserLibrary: FluxLibraryApi = {
     }),
   saveYouTubeUrl: ({ url }) =>
     requestJson('/youtube', { method: 'POST', body: JSON.stringify({ url }) }),
-  readVideoDigestRequest: () => requestJson('/video-digest-request'),
-  saveVideoDigestRequest: (payload) =>
-    requestJson('/video-digest-request', { method: 'PUT', body: JSON.stringify(payload) }),
+  readCodexTaskTarget: () => requestJson('/codex-task'),
+  readLatestVideoHandoff: (taskId) =>
+    requestJson(`/video-handoffs/latest?${new URLSearchParams({ taskId }).toString()}`),
+  createVideoHandoff: (payload) =>
+    requestJson('/video-handoffs', { method: 'POST', body: JSON.stringify(payload) }),
   saveEnvLocal: async () => {
     throw new Error('Save as .env is available in the Flux desktop app.');
   },

@@ -2,9 +2,9 @@
   "manifest_version": "0.4",
   "name": "flux",
   "display_name": "Flux",
-  "version": "1.1.0",
-  "description": "Bounded local access to Flux notes, working list, and queued video digest.",
-  "long_description": "Use Flux through seven bounded MCP tools that list, read, and create local notes, fetch complete native YouTube captions, read or replace the current working list, and read the one current video digest request. The bundle cannot watch videos and does not expose arbitrary files, deletion, shell commands, cloud sync, messages, agent routing, or secrets.",
+  "version": "1.2.0",
+  "description": "Bounded local access to Flux notes, working list, and explicit Codex video handoffs.",
+  "long_description": "Use Flux through ten bounded MCP tools that list, read, and create local notes, fetch complete native YouTube captions, read or replace the current working list, bind the current Codex task, and claim or complete durable video handoffs. Queueing never wakes or messages a task. The bundle cannot watch videos and does not expose arbitrary files, deletion, shell commands, cloud sync, agent routing, or secrets.",
   "author": {
     "name": "Flux"
   },
@@ -41,8 +41,20 @@
       "description": "Read the current Flux working list."
     },
     {
-      "name": "flux_read_video_digest_request",
-      "description": "Read the current YouTube URL queued for an agent video digest."
+      "name": "flux_bind_current_codex_task",
+      "description": "Bind browser Flux to the explicit current Codex task without waking it."
+    },
+    {
+      "name": "flux_claim_video_handoff",
+      "description": "Claim the exact visible handoff ID for this task and read its preserved source transcript."
+    },
+    {
+      "name": "flux_complete_video_handoff",
+      "description": "Publish downstream analysis for a handoff claimed by this task."
+    },
+    {
+      "name": "flux_fail_video_handoff",
+      "description": "Mark a claimed video handoff failed while preserving its source transcript."
     },
     {
       "name": "flux_save_working_list",

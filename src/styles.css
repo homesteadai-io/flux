@@ -1096,6 +1096,39 @@ svg path {
   line-height: 1.45;
 }
 
+.youtube-card {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.source-metadata {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 0 2px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+}
+
+.source-metadata > span {
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.source-metadata strong,
+.source-metadata time {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.source-metadata strong {
+  color: rgba(255, 255, 255, 0.9);
+}
+
 .transcript-box {
   grid-template-rows: auto minmax(0, 1fr);
   align-content: stretch;
@@ -1121,7 +1154,7 @@ svg path {
 .inline-paste-box {
   min-height: 72px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -1130,6 +1163,61 @@ svg path {
   background: rgba(255, 255, 255, 0.09);
   -webkit-user-select: text;
   user-select: text;
+}
+
+.inline-paste-box .digest-button {
+  width: 100%;
+  grid-column: 1 / -1;
+}
+
+.handoff-status,
+.analysis-result {
+  display: grid;
+  gap: 8px;
+  padding: 12px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11px;
+}
+
+.handoff-status {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.handoff-status > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.handoff-status span,
+.analysis-result > span {
+  color: rgba(255, 255, 255, 0.54);
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.handoff-status strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.handoff-status p {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  line-height: 1.4;
+}
+
+.analysis-result pre {
+  max-height: 130px;
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  line-height: 1.45;
 }
 
 .inline-paste-box textarea {
@@ -1227,19 +1315,25 @@ svg path {
 
 .thumbnail-grid::-webkit-scrollbar,
 .note-list::-webkit-scrollbar,
-.transcript-box pre::-webkit-scrollbar {
+.transcript-box pre::-webkit-scrollbar,
+.youtube-card::-webkit-scrollbar,
+.analysis-result pre::-webkit-scrollbar {
   width: 10px;
 }
 
 .thumbnail-grid::-webkit-scrollbar-track,
 .note-list::-webkit-scrollbar-track,
-.transcript-box pre::-webkit-scrollbar-track {
+.transcript-box pre::-webkit-scrollbar-track,
+.youtube-card::-webkit-scrollbar-track,
+.analysis-result pre::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .thumbnail-grid::-webkit-scrollbar-thumb,
 .note-list::-webkit-scrollbar-thumb,
-.transcript-box pre::-webkit-scrollbar-thumb {
+.transcript-box pre::-webkit-scrollbar-thumb,
+.youtube-card::-webkit-scrollbar-thumb,
+.analysis-result pre::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.26);

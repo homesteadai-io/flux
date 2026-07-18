@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -20,8 +22,13 @@ import type {
   FluxAnalysis,
   FluxAnalyzedTranscript,
   FluxCaptureDraft,
+  FluxClaimVideoHandoffPayload,
+  FluxCodexTaskReference,
+  FluxCompleteVideoHandoffPayload,
   FluxCoreOptions,
+  FluxCreateVideoHandoffPayload,
   FluxCreateTextNotePayload,
+  FluxFailVideoHandoffPayload,
   FluxFolderMutationResult,
   FluxLibrarySnapshot,
   FluxNoteFilters,
@@ -32,11 +39,11 @@ import type {
   FluxReadNoteResult,
   FluxSaveCaptureDraftPayload,
   FluxSaveRecordingPayload,
-  FluxSaveVideoDigestRequestPayload,
   FluxSaveWorkingListPayload,
   FluxSaveYouTubePayload,
   FluxTranscriptEngine,
-  FluxVideoDigestRequest,
+  FluxVideoHandoff,
+  FluxVideoHandoffState,
   FluxWorkingList
 } from '../shared/flux-contract.js';
 
@@ -49,6 +56,16 @@ const transcriptNotesFolder = 'Transcript Notes';
 const allowedAudioMimeTypes = new Set(['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav']);
 const allowedNoteSources = new Set<FluxNoteSource>(['text', 'voice', 'youtube']);
 const maxAudioBytes = 25 * 1024 * 1024;
+const maxTranscriptCharacters = 1_000_000;
+const maxAnalysisCharacters = 1_000_000;
+const minimumRepeatedTranscriptTokens = 1;
+const videoHandoffStates = new Set<FluxVideoHandoffState>([
+  'generated',
+  'queued',
+  'claimed',
+  'analysis_ready',
+  'failed'
+]);
 const defaultWorkingList: FluxWorkingList = { title: 'Flux list', items: [] };
 
 export const defaultDataDir = path.join(os.homedir(), 'Flux');
@@ -82,6 +99,112 @@ function normalizeTitle(value: unknown, errorMessage: string) {
     throw new Error(errorMessage);
   }
   return title;
+}
+
+function normalizeTaskId(value: unknown) {
+  if (typeof value !== 'string') {
+    throw new Error('Codex task ID is required.');
+  }
+  const taskId = value.trim();
+  if (!taskId || taskId.length > 160 || /[\\/\u0000-\u001f]/u.test(taskId)) {
+    throw new Error('Codex task ID is invalid.');
+  }
+  return taskId;
+}
+
+function normalizeHandoffId(value: unknown) {
+  if (typeof value !== 'string') {
+    throw new Error('Flux handoff ID is required.');
+  }
+  const handoffId = value.trim();
+  if (!/^[a-f0-9-]{36}$/iu.test(handoffId)) {
+    throw new Error('Flux handoff ID is invalid.');
+  }
+  return handoffId;
+}
+
+function normalizeBoundTask(value: unknown): FluxCodexTaskReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Flux Codex task binding is invalid.');
+  }
+  const task = value as Record<string, unknown>;
+  if (typeof task.boundAt !== 'string' || !Number.isFinite(Date.parse(task.boundAt))) {
+    throw new Error('Flux Codex task binding timestamp is invalid.');
+  }
+  const taskName =
+    task.taskName === undefined
+      ? undefined
+      : normalizeTitle(task.taskName, 'Flux Codex task name is invalid.').slice(0, 160);
+  return {
+    taskId: normalizeTaskId(task.taskId),
+    ...(taskName ? { taskName } : {}),
+    boundAt: task.boundAt
+  };
+}
+
+function normalizeTimestamp(value: unknown, label: string) {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return value;
+}
+
+function normalizeBoundedText(value: unknown, label: string, maximum: number) {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be text.`);
+  }
+  const text = value.trim();
+  if (!text || text.length > maximum) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return text;
+}
+
+function normalizeTranscriptToken(token: string) {
+  return token.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+export function removeRepeatedTranscriptBlocks(value: string) {
+  const transcript = value.replace(/\r\n?/g, '\n').trim();
+  const matches = Array.from(transcript.matchAll(/\S+/gu));
+  if (matches.length < minimumRepeatedTranscriptTokens * 2) {
+    return transcript;
+  }
+
+  const tokens = matches.map((match) => normalizeTranscriptToken(match[0]));
+  const signatureLength = Math.min(12, minimumRepeatedTranscriptTokens);
+  for (
+    let candidate = minimumRepeatedTranscriptTokens;
+    candidate <= tokens.length - minimumRepeatedTranscriptTokens;
+    candidate += 1
+  ) {
+    let signatureMatches = true;
+    for (let offset = 0; offset < signatureLength; offset += 1) {
+      if (tokens[candidate + offset] !== tokens[offset]) {
+        signatureMatches = false;
+        break;
+      }
+    }
+    if (!signatureMatches || tokens.length < candidate * 2) {
+      continue;
+    }
+
+    let mismatches = 0;
+    const allowedMismatches = 0;
+    for (let index = candidate; index < tokens.length; index += 1) {
+      if (tokens[index] !== tokens[(index - candidate) % candidate]) {
+        mismatches += 1;
+        if (mismatches > allowedMismatches) {
+          break;
+        }
+      }
+    }
+    if (mismatches <= allowedMismatches) {
+      return transcript.slice(0, matches[candidate].index).trim();
+    }
+  }
+
+  return transcript;
 }
 
 function slugify(input: string) {
@@ -471,7 +594,8 @@ export class FluxCore {
     if (!result.ok) {
       throw new Error(`Could not fetch YouTube captions for ${url}. ${result.message}`);
     }
-    if (!result.transcript.trim()) {
+    const transcript = removeRepeatedTranscriptBlocks(result.transcript);
+    if (!transcript) {
       throw new Error(`Could not fetch YouTube captions for ${url}. The transcript was empty.`);
     }
 
@@ -491,10 +615,10 @@ export class FluxCore {
           created: created.toISOString(),
           folder: transcriptNotesFolder,
           url,
-          transcript: result.transcript,
-          transcriptPreview: previewTranscript(result.transcript)
+          transcript,
+          transcriptPreview: previewTranscript(transcript)
         };
-        return { note: candidate, markdown: createMarkdownNote(candidate, result.transcript) };
+        return { note: candidate, markdown: createMarkdownNote(candidate, transcript) };
       }
     );
     return { note, library: this.listLibrary() };
@@ -619,78 +743,347 @@ export class FluxCore {
     return captureDraft;
   }
 
-  readVideoDigestRequest(): FluxVideoDigestRequest | null {
+  readCodexTaskTarget(): FluxCodexTaskReference | null {
     this.ensureLibrary();
-    const requestPath = this.resolveLibraryPath('.flux', 'video-digest-request.json');
-    if (!existsSync(requestPath)) {
+    const targetPath = this.resolveLibraryPath('.flux', 'codex-task.json');
+    if (!existsSync(targetPath)) {
       return null;
     }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(requestPath, 'utf8')) as unknown;
-    } catch (error) {
-      throw new Error(
-        `Could not read Flux video digest request: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('Flux video digest request is invalid.');
-    }
-    const value = parsed as Record<string, unknown>;
-    const url = normalizeHttpsYouTubeUrl(value.url);
-    if (typeof value.requestedAt !== 'string' || !Number.isFinite(Date.parse(value.requestedAt))) {
-      throw new Error('Flux video digest request timestamp is invalid.');
-    }
-
-    let sourceNote: FluxVideoDigestRequest['sourceNote'];
-    if (value.sourceNote !== undefined) {
-      if (!value.sourceNote || typeof value.sourceNote !== 'object' || Array.isArray(value.sourceNote)) {
-        throw new Error('Flux video digest source note is invalid.');
-      }
-      const source = value.sourceNote as Record<string, unknown>;
-      sourceNote = {
-        noteId: normalizeNoteId(source.noteId),
-        folder: sanitizeFolderName(String(source.folder || '')),
-        title: normalizeTitle(source.title, 'Flux video digest source title is invalid.')
-      };
-    }
-
-    return { url, requestedAt: value.requestedAt, ...(sourceNote ? { sourceNote } : {}) };
+    return normalizeBoundTask(JSON.parse(readFileSync(targetPath, 'utf8')) as unknown);
   }
 
-  saveVideoDigestRequest({ url, sourceNote }: FluxSaveVideoDigestRequestPayload): FluxVideoDigestRequest {
-    const normalizedUrl = normalizeHttpsYouTubeUrl(url);
-    let storedSource: FluxVideoDigestRequest['sourceNote'];
-    if (sourceNote !== undefined) {
-      const note = this.readNote(sourceNote).note;
-      if (note.source !== 'youtube' || !note.url || normalizeHttpsYouTubeUrl(note.url) !== normalizedUrl) {
-        throw new Error('The selected Flux note does not match that YouTube URL.');
-      }
-      storedSource = { noteId: note.id, folder: note.folder, title: note.title };
+  saveCodexTaskTarget(taskId: string, taskName?: string): FluxCodexTaskReference {
+    const normalizedTaskId = normalizeTaskId(taskId);
+    const normalizedTaskName = taskName
+      ? normalizeTitle(taskName, 'Codex task name is invalid.').slice(0, 160)
+      : undefined;
+    const existing = this.readCodexTaskTarget();
+    if (
+      existing?.taskId === normalizedTaskId &&
+      (normalizedTaskName === undefined || existing.taskName === normalizedTaskName)
+    ) {
+      return existing;
+    }
+    const target: FluxCodexTaskReference = {
+      taskId: normalizedTaskId,
+      ...(normalizedTaskName ? { taskName: normalizedTaskName } : {}),
+      boundAt: new Date().toISOString()
+    };
+    this.writeJsonAtomically(this.resolveLibraryPath('.flux', 'codex-task.json'), 'codex-task', target);
+    return target;
+  }
+
+  listVideoHandoffs(taskId?: string): FluxVideoHandoff[] {
+    this.ensureLibrary();
+    const normalizedTaskId = taskId === undefined ? undefined : normalizeTaskId(taskId);
+    const handoffDir = this.resolveLibraryPath('.flux', 'video-handoffs');
+    return readdirSync(handoffDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^[a-f0-9-]{36}\.json$/iu.test(entry.name))
+      .map((entry) => this.readVideoHandoff(entry.name.slice(0, -5)))
+      .filter((handoff) => normalizedTaskId === undefined || handoff.targetTask.taskId === normalizedTaskId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  readLatestVideoHandoff(taskId?: string): FluxVideoHandoff | null {
+    const selectedTaskId = taskId ?? this.readCodexTaskTarget()?.taskId;
+    if (!selectedTaskId) {
+      return null;
+    }
+    return this.listVideoHandoffs(selectedTaskId)[0] ?? null;
+  }
+
+  createVideoHandoff({ expectedTaskId, sourceNote }: FluxCreateVideoHandoffPayload): FluxVideoHandoff {
+    const normalizedExpectedTaskId = normalizeTaskId(expectedTaskId);
+    const targetTask = this.readCodexTaskTarget();
+    if (!targetTask) {
+      throw new Error('Connect Flux to a Codex task before queueing a handoff.');
+    }
+    if (targetTask.taskId !== normalizedExpectedTaskId) {
+      throw new Error('The connected Codex task changed. Refresh Flux before queueing this handoff.');
+    }
+    const note = this.readNote(sourceNote).note;
+    if (note.source !== 'youtube' || !note.url || !note.transcript.trim()) {
+      throw new Error('Generate a YouTube transcript before queueing a handoff.');
     }
 
-    const request: FluxVideoDigestRequest = {
-      url: normalizedUrl,
-      requestedAt: new Date().toISOString(),
-      ...(storedSource ? { sourceNote: storedSource } : {})
+    const now = new Date().toISOString();
+    const generated: FluxVideoHandoff = {
+      handoffId: randomUUID(),
+      sourceUrl: normalizeHttpsYouTubeUrl(note.url),
+      capturedAt: normalizeTimestamp(note.created, 'Transcript capture timestamp'),
+      createdAt: now,
+      updatedAt: now,
+      state: 'generated',
+      rawTranscript: normalizeBoundedText(note.transcript, 'Raw transcript', maxTranscriptCharacters),
+      sourceNote: { noteId: note.id, folder: note.folder, title: note.title },
+      targetTask
     };
-    this.ensureLibrary();
-    const requestPath = this.resolveLibraryPath('.flux', 'video-digest-request.json');
-    const tempPath = this.resolveLibraryPath('.flux', `video-digest-request.${randomUUID()}.tmp`);
-    writeFileSync(tempPath, `${JSON.stringify(request, null, 2)}\n`, {
-      encoding: 'utf8',
-      flag: 'wx'
+    this.writeVideoHandoff(generated, true);
+    return this.queueGeneratedVideoHandoff(generated);
+  }
+
+  claimVideoHandoff({ handoffId, taskId }: FluxClaimVideoHandoffPayload): FluxVideoHandoff {
+    const normalizedTaskId = normalizeTaskId(taskId);
+    const selected = this.readVideoHandoff(normalizeHandoffId(handoffId));
+    if (selected.targetTask.taskId !== normalizedTaskId) {
+      throw new Error('That Flux handoff targets a different Codex task.');
+    }
+    if (selected.state === 'claimed' || selected.state === 'analysis_ready') {
+      return selected;
+    }
+    if (selected.state !== 'queued') {
+      throw new Error(`Flux handoff ${selected.handoffId} cannot be claimed from ${selected.state}.`);
+    }
+
+    const claimPath = this.resolveLibraryPath('.flux', 'video-handoffs', `${selected.handoffId}.claim`);
+    const publishedClaim = this.publishExclusiveMarker(
+      claimPath,
+      `${selected.handoffId}.claim`,
+      `${normalizedTaskId}\n`
+    );
+    if (!publishedClaim) {
+      const owner = readFileSync(claimPath, 'utf8').trim();
+      if (owner !== normalizedTaskId) {
+        throw new Error('That Flux handoff was claimed by a different Codex task.');
+      }
+    }
+
+    const claimedAt = new Date().toISOString();
+    const claimed: FluxVideoHandoff = {
+      ...selected,
+      state: 'claimed',
+      claimedAt,
+      updatedAt: claimedAt
+    };
+    this.writeVideoHandoff(claimed);
+    return claimed;
+  }
+
+  completeVideoHandoff({
+    handoffId,
+    taskId,
+    analysisResult
+  }: FluxCompleteVideoHandoffPayload): FluxVideoHandoff {
+    return this.finishVideoHandoff(handoffId, taskId, {
+      state: 'analysis_ready',
+      analysisResult: normalizeBoundedText(analysisResult, 'Flux analysis result', maxAnalysisCharacters)
     });
-    renameSync(tempPath, requestPath);
-    return request;
+  }
+
+  failVideoHandoff({ handoffId, taskId, failureMessage }: FluxFailVideoHandoffPayload): FluxVideoHandoff {
+    return this.finishVideoHandoff(handoffId, taskId, {
+      state: 'failed',
+      failureMessage: normalizeBoundedText(failureMessage, 'Flux failure message', 2_000)
+    });
+  }
+
+  private finishVideoHandoff(
+    handoffId: string,
+    taskId: string,
+    outcome:
+      | { state: 'analysis_ready'; analysisResult: string }
+      | { state: 'failed'; failureMessage: string }
+  ) {
+    const normalizedTaskId = normalizeTaskId(taskId);
+    const normalizedHandoffId = normalizeHandoffId(handoffId);
+    let handoff = this.readVideoHandoff(normalizedHandoffId);
+    if (handoff.targetTask.taskId !== normalizedTaskId) {
+      throw new Error('That Flux handoff targets a different Codex task.');
+    }
+    if (handoff.state === 'analysis_ready' || handoff.state === 'failed') {
+      return handoff;
+    }
+    if (handoff.state !== 'claimed') {
+      throw new Error(`Flux handoff ${handoff.handoffId} must be claimed before completion.`);
+    }
+
+    const claimPath = this.resolveLibraryPath('.flux', 'video-handoffs', `${handoff.handoffId}.claim`);
+    if (!existsSync(claimPath) || readFileSync(claimPath, 'utf8').trim() !== normalizedTaskId) {
+      throw new Error('Flux could not verify the claiming Codex task.');
+    }
+
+    const terminalPath = this.resolveLibraryPath(
+      '.flux',
+      'video-handoffs',
+      `${handoff.handoffId}.terminal.json`
+    );
+    const requestedTerminal = {
+      taskId: normalizedTaskId,
+      completedAt: new Date().toISOString(),
+      ...outcome
+    };
+    let terminal: typeof requestedTerminal;
+    const publishedTerminal = this.publishExclusiveMarker(
+      terminalPath,
+      `${handoff.handoffId}.terminal`,
+      `${JSON.stringify(requestedTerminal, null, 2)}\n`
+    );
+    if (publishedTerminal) {
+      terminal = requestedTerminal;
+    } else {
+      const parsed = JSON.parse(readFileSync(terminalPath, 'utf8')) as Record<string, unknown>;
+      if (normalizeTaskId(parsed.taskId) !== normalizedTaskId) {
+        throw new Error('Flux terminal transition belongs to a different Codex task.');
+      }
+      const completedAt = normalizeTimestamp(parsed.completedAt, 'Completion timestamp');
+      terminal = parsed.state === 'analysis_ready'
+        ? {
+            taskId: normalizedTaskId,
+            completedAt,
+            state: 'analysis_ready',
+            analysisResult: normalizeBoundedText(
+              parsed.analysisResult,
+              'Flux analysis result',
+              maxAnalysisCharacters
+            )
+          }
+        : parsed.state === 'failed'
+          ? {
+              taskId: normalizedTaskId,
+              completedAt,
+              state: 'failed',
+              failureMessage: normalizeBoundedText(parsed.failureMessage, 'Flux failure message', 2_000)
+            }
+          : (() => {
+              throw new Error('Flux terminal transition is invalid.');
+            })();
+    }
+
+    handoff = this.readVideoHandoff(normalizedHandoffId);
+    if (handoff.state === 'analysis_ready' || handoff.state === 'failed') {
+      return handoff;
+    }
+    if (handoff.state !== 'claimed') {
+      throw new Error(`Flux handoff ${handoff.handoffId} must be claimed before completion.`);
+    }
+
+    const completed: FluxVideoHandoff = {
+      ...handoff,
+      ...(terminal.state === 'analysis_ready'
+        ? { state: terminal.state, analysisResult: terminal.analysisResult }
+        : { state: terminal.state, failureMessage: terminal.failureMessage }),
+      completedAt: terminal.completedAt,
+      updatedAt: terminal.completedAt
+    };
+    this.writeVideoHandoff(completed);
+    return completed;
+  }
+
+  private readVideoHandoff(handoffId: string): FluxVideoHandoff {
+    const normalizedId = normalizeHandoffId(handoffId);
+    const handoffPath = this.resolveLibraryPath('.flux', 'video-handoffs', `${normalizedId}.json`);
+    if (!existsSync(handoffPath)) {
+      throw new Error(`Flux handoff ${normalizedId} does not exist.`);
+    }
+
+    const parsed = JSON.parse(readFileSync(handoffPath, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Flux video handoff is invalid.');
+    }
+    const value = parsed as Record<string, unknown>;
+    if (typeof value.state !== 'string' || !videoHandoffStates.has(value.state as FluxVideoHandoffState)) {
+      throw new Error('Flux video handoff state is invalid.');
+    }
+    if (!value.sourceNote || typeof value.sourceNote !== 'object' || Array.isArray(value.sourceNote)) {
+      throw new Error('Flux video handoff source note is invalid.');
+    }
+    const sourceNote = value.sourceNote as Record<string, unknown>;
+    const queuedAt = value.queuedAt === undefined ? undefined : normalizeTimestamp(value.queuedAt, 'Queued timestamp');
+    const claimedAt =
+      value.claimedAt === undefined ? undefined : normalizeTimestamp(value.claimedAt, 'Claimed timestamp');
+    const completedAt =
+      value.completedAt === undefined ? undefined : normalizeTimestamp(value.completedAt, 'Completion timestamp');
+    const analysisResult =
+      value.analysisResult === undefined
+        ? undefined
+        : normalizeBoundedText(value.analysisResult, 'Flux analysis result', maxAnalysisCharacters);
+    const failureMessage =
+      value.failureMessage === undefined
+        ? undefined
+        : normalizeBoundedText(value.failureMessage, 'Flux failure message', 2_000);
+
+    const normalized: FluxVideoHandoff = {
+      handoffId: normalizeHandoffId(value.handoffId),
+      sourceUrl: normalizeHttpsYouTubeUrl(value.sourceUrl),
+      capturedAt: normalizeTimestamp(value.capturedAt, 'Transcript capture timestamp'),
+      createdAt: normalizeTimestamp(value.createdAt, 'Handoff creation timestamp'),
+      updatedAt: normalizeTimestamp(value.updatedAt, 'Handoff update timestamp'),
+      ...(queuedAt ? { queuedAt } : {}),
+      ...(claimedAt ? { claimedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+      state: value.state as FluxVideoHandoffState,
+      rawTranscript: normalizeBoundedText(value.rawTranscript, 'Raw transcript', maxTranscriptCharacters),
+      sourceNote: {
+        noteId: normalizeNoteId(sourceNote.noteId),
+        folder: sanitizeFolderName(String(sourceNote.folder || '')),
+        title: normalizeTitle(sourceNote.title, 'Flux video handoff source title is invalid.')
+      },
+      targetTask: normalizeBoundTask(value.targetTask),
+      ...(analysisResult ? { analysisResult } : {}),
+      ...(failureMessage ? { failureMessage } : {})
+    };
+    return this.queueGeneratedVideoHandoff(normalized);
+  }
+
+  private queueGeneratedVideoHandoff(handoff: FluxVideoHandoff): FluxVideoHandoff {
+    if (handoff.state !== 'generated') {
+      return handoff;
+    }
+    const queuedAt = new Date().toISOString();
+    const queued: FluxVideoHandoff = {
+      ...handoff,
+      state: 'queued',
+      queuedAt,
+      updatedAt: queuedAt
+    };
+    this.writeVideoHandoff(queued);
+    return queued;
+  }
+
+  private writeVideoHandoff(handoff: FluxVideoHandoff, createOnly = false) {
+    const handoffPath = this.resolveLibraryPath('.flux', 'video-handoffs', `${handoff.handoffId}.json`);
+    if (createOnly) {
+      writeFileSync(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+      return;
+    }
+    this.writeJsonAtomically(handoffPath, `video-handoff-${handoff.handoffId}`, handoff);
+  }
+
+  private publishExclusiveMarker(filePath: string, prefix: string, content: string) {
+    const tempPath = this.resolveLibraryPath(
+      '.flux',
+      'video-handoffs',
+      `${prefix}.${randomUUID()}.tmp`
+    );
+    writeFileSync(tempPath, content, { encoding: 'utf8', flag: 'wx' });
+    try {
+      linkSync(tempPath, filePath);
+      return true;
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code !== 'EEXIST') {
+        throw error;
+      }
+      return false;
+    } finally {
+      if (existsSync(tempPath)) {
+        unlinkSync(tempPath);
+      }
+    }
+  }
+
+  private writeJsonAtomically(filePath: string, prefix: string, value: unknown) {
+    this.ensureLibrary();
+    const tempPath = this.resolveLibraryPath('.flux', `${prefix}.${randomUUID()}.tmp`);
+    writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    renameSync(tempPath, filePath);
   }
 
   private ensureLibrary() {
     mkdirSync(this.dataDir, { recursive: true });
     mkdirSync(this.resolveLibraryPath('Inbox'), { recursive: true });
     mkdirSync(this.resolveLibraryPath('.flux', 'audio'), { recursive: true });
+    mkdirSync(this.resolveLibraryPath('.flux', 'video-handoffs'), { recursive: true });
     return this.dataDir;
   }
 

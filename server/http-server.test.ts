@@ -9,17 +9,19 @@ import { startFluxHttpServer } from './http-server.js';
 
 function makeCore() {
   const workingList = { title: 'Test list', items: ['One'] };
-  let videoDigestRequest: unknown = null;
+  const codexTask = { taskId: 'task-browser', boundAt: '2026-07-17T12:00:00.000Z' };
+  let latestHandoff: unknown = null;
   return {
     listLibrary: () => ({ folders: [{ name: 'Inbox', count: 0 }], notes: [] }),
     readNote: ({ noteId, folder }: { noteId: string; folder: string }) => ({ noteId, folder, markdown: '# Note' }),
     createTextNote: (payload: unknown) => ({ payload }),
     saveRecording: async (payload: unknown) => ({ payload }),
     saveYouTubeUrl: async (payload: unknown) => ({ payload }),
-    readVideoDigestRequest: () => videoDigestRequest,
-    saveVideoDigestRequest: (payload: unknown) => {
-      videoDigestRequest = payload;
-      return payload;
+    readCodexTaskTarget: () => codexTask,
+    readLatestVideoHandoff: (taskId: string) => taskId === codexTask.taskId ? latestHandoff : null,
+    createVideoHandoff: (payload: unknown) => {
+      latestHandoff = { handoffId: 'handoff-browser', state: 'queued', payload };
+      return latestHandoff;
     },
     createFolder: (name: string) => ({ folder: name }),
     moveNote: (locator: { noteId: string; folder: string }, targetFolder: string) => ({ locator, targetFolder }),
@@ -65,37 +67,43 @@ test('serves the built Flux shell and health endpoint on loopback', async () => 
   }
 });
 
-test('saves and reads the shared video digest request', async () => {
+test('reads the bound Codex task and creates a browser video handoff', async () => {
   const staticDir = mkdtempSync(path.join(os.tmpdir(), 'flux-http-'));
   writeFileSync(path.join(staticDir, 'index.html'), '<main>Flux</main>');
   const host = await startFluxHttpServer({ core: makeCore(), staticDir, port: 0 });
 
   try {
-    const empty = await fetch(`${host.url}/api/video-digest-request`);
-    assert.equal(empty.status, 200);
+    const target = await fetch(`${host.url}/api/codex-task`);
+    assert.equal(target.status, 200);
+    assert.deepEqual(await target.json(), { taskId: 'task-browser', boundAt: '2026-07-17T12:00:00.000Z' });
+
+    const empty = await fetch(`${host.url}/api/video-handoffs/latest?taskId=task-browser`);
     assert.equal(await empty.json(), null);
 
     const payload = {
-      url: 'https://youtu.be/digest-example',
+      expectedTaskId: 'task-browser',
       sourceNote: { noteId: 'youtube-note', folder: 'Transcript Notes' }
     };
-    const saved = await fetch(`${host.url}/api/video-digest-request`, {
-      method: 'PUT',
+    const saved = await fetch(`${host.url}/api/video-handoffs`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    assert.equal(saved.status, 200);
-    assert.deepEqual(await saved.json(), payload);
+    assert.equal(saved.status, 201);
+    assert.deepEqual(await saved.json(), { handoffId: 'handoff-browser', state: 'queued', payload });
 
-    const read = await fetch(`${host.url}/api/video-digest-request`);
-    assert.deepEqual(await read.json(), payload);
+    const read = await fetch(`${host.url}/api/video-handoffs/latest?taskId=task-browser`);
+    assert.deepEqual(await read.json(), { handoffId: 'handoff-browser', state: 'queued', payload });
 
-    const malformed = await fetch(`${host.url}/api/video-digest-request`, {
-      method: 'PUT',
+    const malformed = await fetch(`${host.url}/api/video-handoffs`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: payload.url, sourceNote: 'not-a-note' })
+      body: JSON.stringify({ sourceNote: 'not-a-note' })
     });
     assert.equal(malformed.status, 422);
+
+    const missingTask = await fetch(`${host.url}/api/video-handoffs/latest`);
+    assert.equal(missingTask.status, 422);
   } finally {
     await host.close();
   }

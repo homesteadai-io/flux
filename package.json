@@ -1,6 +1,6 @@
 {
   "name": "flux",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "dist-electron/electron/main.js",
@@ -8,6 +8,7 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://127.0.0.1:5173 dist-electron/electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "tsc -p tsconfig.electron.json && tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
+    "browser:start": "node dist-electron/server/browser-main.js",
     "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.mcp.json --noEmit && tsc -p tsconfig.json --noEmit",
     "watch": "node scripts/watch.cjs",
     "test": "node --import tsx --test --test-concurrency=1 server/*.test.ts mcp/*.test.ts src/*.test.ts",

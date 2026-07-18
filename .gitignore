@@ -1,8 +1,10 @@
 node_modules/
 dist/
 dist-electron/
+dist-mcpb/
 release/
 .vite/
+.playwright-cli/
 
 .env
 .env.local
